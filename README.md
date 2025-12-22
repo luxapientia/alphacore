@@ -28,12 +28,12 @@ Validators score work by verifying:
 - compliance/correctness
 - performance and efficiency
 
-## Security Philosophy (Current + Direction)
+## Security Philosophy
 
 This repo is actively evolving. The current implementation emphasizes sandboxing untrusted miner submissions; future iterations can broaden verification methods.
 
-- **Miners execute automation**: miners interpret tasks and produce a submission artifact.
-- **Validator-side sandboxing for untrusted inputs (today)**: untrusted inputs (e.g., a miner’s Terraform submission) are processed inside Firecracker microVMs with strict egress controls.
+- **Miners execute automation**: miners interpret tasks, execute against their own environments and produce a submission artifact.
+- **Validator-side sandboxing for untrusted inputs (today)**: untrusted inputs (e.g., a miner’s Terraform submission) are processed inside Firecracker microVMs to verify their integrity with strict egress controls.
 - **Outcome-focused scoring**: tasks include machine-checkable requirements (“invariants”) that are validated against outputs (today: typically `terraform.tfstate`).
 
 For details on the current sandbox model, see [`VALIDATOR-API.md`](VALIDATOR-API.md).
