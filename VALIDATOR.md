@@ -6,7 +6,7 @@ Today most tasks are “Terraform on GCP”, but the validator architecture is i
 
 ## What are “invariants”?
 
-An **invariant** is a machine-checkable requirement attached to each task. In AlphaCore tasks, invariants describe what must be true about the miner’s submission output (today: typically the resulting `terraform.tfstate`) — for example: “a resource with a specific name exists”, “a network rule allows tcp:80”, “an access binding grants viewer to the validator identity”, etc.
+An **invariant** is a machine-checkable requirement attached to each task. In AlphaCore tasks, invariants describe what must be true about the miner’s submission output (today: the resulting `terraform.tfstate`) — for example: “a resource with a specific name exists”, “a network rule allows tcp:80”, “an access binding grants viewer to the validator identity”, etc.
 
 During validation:
 - The miner submission (a ZIP) is executed and/or inspected in the sandbox, producing a `terraform.tfstate`.
