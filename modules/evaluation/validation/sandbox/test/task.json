@@ -1,0 +1,31 @@
+{
+  "version": "v0",
+  "task_id": "596ea7ab-8dc9-4e23-980a-0574d560437b",
+  "nonce": "0579b710c62be7e4",
+  "kind": "basic virtual machine",
+  "invariants": [
+    {
+      "resource_type": "google_compute_instance",
+      "match": {
+        "values.name": "vm-0579b710",
+        "values.zone": "us-central1-a",
+        "values.machine_type": "e2-small",
+        "values.metadata_startup_script": "#!/bin/bash\nprintf '596ea7-0579b7' > /var/tmp/acore-token\n"
+      }
+    }
+  ],
+  "prompt": "Provision exactly one Compute Engine VM.\nLaunch a lone VM in us-central1-a using machine type e2-small and include the tokenised startup script.",
+  "metadata": {
+    "resource_keys": [
+      "compute_instance_basic"
+    ],
+    "resource_kinds": [
+      "basic virtual machine"
+    ],
+    "hints": [
+      "Provision exactly one Compute Engine VM.",
+      "Launch a lone VM in us-central1-a using machine type e2-small and include the tokenised startup script."
+    ],
+    "discovery": true
+  }
+}

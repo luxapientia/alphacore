@@ -1,0 +1,15 @@
+[Unit]
+Description=AlphaCore sandbox networking and proxy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/alphacore-sandbox-net
+ExecStart=/usr/local/sbin/alphacore-sandbox-net
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
+

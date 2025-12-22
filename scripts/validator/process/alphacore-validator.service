@@ -1,0 +1,20 @@
+[Unit]
+Description=AlphaCore Validator Service
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/git/private/alphacore
+Environment="VENV_DIR=/home/%i/git/private/alphacore/venv"
+Environment="ENV_FILE=/home/%i/git/private/alphacore/env/validator.env"
+ExecStart=/bin/bash -lc '/home/%i/git/private/alphacore/scripts/validator/process/start_validator_pm2.sh'
+Restart=on-failure
+RestartSec=5
+
+# Logs
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

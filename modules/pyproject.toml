@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alphacore-modules"
+version = "1.0.0"
+description = "AlphaCore - Autonomous DevOps Task Generation and Evaluation Framework"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["alphacore_core*", "modules*"]
+exclude = ["tests*", "docs*", "data*"]
+
+# Black configuration
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+skip-string-normalization = true
+
+# Ruff configuration
+[tool.ruff]
+line-length = 120
+target-version = "py311"

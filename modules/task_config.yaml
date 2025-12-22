@@ -1,0 +1,120 @@
+# AlphaCore Task Generation Configuration
+#
+# Loaded by subnet.validator.api TaskGenerationPipeline (via ALPHACORE_CONFIG)
+# to determine providers, resource families, and task banks available to validators.
+#
+# Hierarchy:
+#   providers -> task_banks -> families -> resources
+#
+# Each level can be:
+#   enabled: true/false     - Enable/disable entire level
+#   items: [...]            - Whitelist specific items (omit = all enabled)
+
+# =============================================================================
+# PROVIDERS
+# =============================================================================
+providers:
+  gcp:
+    enabled: true
+
+    # Task Banks (single vs composite resources)
+    task_banks:
+      single_resource:
+        enabled: true
+        # Which resource types to enable for single-resource tasks
+        # Omit 'resources' to enable all available resources
+        resources:
+          - storage_bucket
+          - compute_instance_basic
+          - artifact_repository
+          - pubsub_topic
+          - service_account
+          - dns_managed_zone
+          - custom_iam_role
+          - secret_manager_secret
+
+      composite_resource:
+        enabled: true
+        min_resources: 2
+        max_resources: 4
+
+        # Composition families for multi-resource tasks
+        # Omit 'families' to enable all available families
+        families:
+          storage_analytics:
+            enabled: true
+            resources:
+              - storage_bucket
+              - pubsub_topic
+              - service_account
+
+          artifact_delivery:
+            enabled: true
+            resources:
+              - artifact_repository
+              - storage_bucket
+              - service_account
+
+          network_isolation:
+            enabled: true
+            resources:
+              - network
+              - subnetwork
+              - firewall
+              - compute_instance_basic
+
+          compute_deployment:
+            enabled: true
+            resources:
+              - compute_instance_basic
+              - network
+              - service_account
+
+          iam_security:
+            enabled: true
+            resources:
+              - service_account
+              - custom_iam_role
+              - project_iam_member
+
+          data_pipeline:
+            enabled: false  # Example: disabled family
+            resources:
+              - pubsub_topic
+              - pubsub_subscription
+              - storage_bucket
+
+          serverless_app:
+            enabled: false  # Example: disabled family
+            resources:
+              - cloud_function
+              - pubsub_topic
+              - storage_bucket
+
+  aws:
+    enabled: false  # AWS support coming soon
+
+  azure:
+    enabled: false  # Azure support coming soon
+
+# =============================================================================
+# GLOBAL SETTINGS
+# =============================================================================
+settings:
+  # Validator service account (can be overridden via env var)
+  validator_sa: validator@example.com
+
+  # Task repository configuration
+  repository:
+    # Path to store generated tasks (relative to project root or absolute)
+    path: ./tasks  # Relative path from project root
+    # Each task creates a folder: <path>/<task_id>/
+    #   - miner.json     (prompt only, sent to miners)
+    #   - validator.json (full task with invariants)
+
+  # LLM instruction generation
+  llm:
+    enabled: false  # Set to true to use LLM (requires OPENAI_API_KEY), false uses deterministic fallback
+    model: gpt-5-mini
+    temperature: 0.6
+    fallback_on_failure: true
