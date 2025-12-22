@@ -13,6 +13,20 @@ During validation:
 - The validator checks each invariant against that state and marks it pass/fail.
 - The sandbox returns a `score` in `[0..1]` based on how many invariants passed (and `pass` requires all invariants to pass).
 
+## Task generation and prompts
+
+Validators generate tasks from a structured spec (provider + resources + invariants) and then produce the miner-facing promp as natural language.
+
+- The task spec stores the invariants and other machine-checkable requirements (what the validator will score).
+- The miner receives a prompt-only view of the task (natural language).
+- Prompt generation uses an LLM to introduce natural-language variability across runs while keeping the invariant details intact.
+
+By default, this repo is configured to use an LLM model of `gpt-5-mini` for prompt generation (see `modules/generation/instructions.py` and `modules/task_config.yaml`).
+
+Controls:
+- `ALPHACORE_ENABLE_LLM=true|false` (validator launch scripts default to enabled)
+- `ALPHACORE_TASK_PROMPT_MODEL` (defaults to `gpt-5-mini`)
+
 ## Scoring summary
 
 At a high level, the validator computes per-miner scores like this:
