@@ -1,6 +1,6 @@
 # Validator
 
-This doc covers how to run the **validator neuron**. In typical deployments the validator uses the sandboxed Validation API for scoring; see `VALIDATOR-API.md` for the sandbox setup.
+This doc covers how to run the **validator neuron**. In typical deployments the validator uses the sandboxed Validation API for scoring; see [`VALIDATOR-API.md`](VALIDATOR-API.md) for the sandbox setup.
 
 Today most tasks are “Terraform on GCP”, but the validator architecture is intended to support additional clouds, decentralized providers, and task types beyond Terraform generation as the protocol evolves.
 
