@@ -46,7 +46,7 @@ def get_templates() -> list[ResourceTemplate]:
             provides=("logging_project_sink",),
             requires=("bucket",),
             builder=_build_logging_sink,
-            base_hints=("Configure sink to export logs to existing storage or pubsub.",),
+            base_hints=("Configure a sink that exports logs to the provided storage bucket destination.",),
             weight=0.75,
         )
     ]

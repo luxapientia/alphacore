@@ -138,6 +138,13 @@ class TaskInstructionGenerator:
         self.last_trace: Optional[dict] = None
         self._log_prompt_text = get_bool_env("ALPHACORE_LOG_PROMPT_TEXT", False)
 
+        # Control prompt post-processing. The generator always strips markdown/emoji
+        # and enforces required terms, but additional sentence rewrites are optional.
+        postprocess = (os.getenv("ALPHACORE_PROMPT_POSTPROCESS") or "full").strip().lower()
+        if postprocess not in {"full", "minimal", "none"}:
+            postprocess = "full"
+        self._prompt_postprocess = postprocess
+
         # NEW: raw LLM response logging (opt-in).
         self._log_llm_raw = get_bool_env("ALPHACORE_LOG_LLM_RAW", False)
         try:
@@ -361,9 +368,13 @@ class TaskInstructionGenerator:
         if not self.enable_llm:
             started = time.time()
             fallback = self._fallback_instructions(task)
-            fallback = self._normalize_prompt_phrasing(fallback, task)
+            if self._prompt_postprocess == "full":
+                fallback = self._normalize_prompt_phrasing(fallback, task)
+            elif self._prompt_postprocess == "minimal":
+                fallback = self._normalize_submission_instructions(fallback, task)
             fallback = self._downcase_invariant_enum_tokens(fallback, task)
             fallback = self._ensure_provider_reference(fallback, task)
+            fallback = re.sub(r"\s+", " ", fallback).strip()
             validated = self._enforce_allowed_content(fallback, task)
             try:
                 self.last_trace = {
@@ -561,9 +572,13 @@ class TaskInstructionGenerator:
 
                     cleaned = self._to_plain_text(raw_message)
                     cleaned, auto_fixed_startup_shebang = self._repair_startup_shebang(cleaned, task)
-                    cleaned = self._normalize_prompt_phrasing(cleaned, task)
+                    if self._prompt_postprocess == "full":
+                        cleaned = self._normalize_prompt_phrasing(cleaned, task)
+                    elif self._prompt_postprocess == "minimal":
+                        cleaned = self._normalize_submission_instructions(cleaned, task)
                     cleaned = self._downcase_invariant_enum_tokens(cleaned, task)
                     cleaned = self._ensure_provider_reference(cleaned, task)
+                    cleaned = re.sub(r"\s+", " ", cleaned).strip()
                     auto_fixed_disallowed_terms: list[str] = []
                     usage_total_tokens_all_attempts = 0
                     try:
@@ -1091,8 +1106,21 @@ class TaskInstructionGenerator:
         for invariant in invariants:
             shuffled_fields = list(invariant.match.items())
             random.shuffle(shuffled_fields)
+
+            def _display_value(value: object) -> object:
+                if not isinstance(value, str):
+                    return value
+                raw = value.strip()
+                if not raw:
+                    return value
+                if "@" in raw or "." in raw or "/" in raw:
+                    return value
+                if _UPPER_ENUM_TOKEN_RE.fullmatch(raw) and any(ch.isalpha() for ch in raw):
+                    return raw.lower()
+                return value
+
             fields = ", ".join(
-                f"{TaskInstructionGenerator._humanize_field(k)} equals {json.dumps(v, ensure_ascii=True)}"
+                f"{TaskInstructionGenerator._humanize_field(k)} equals {json.dumps(_display_value(v), ensure_ascii=True)}"
                 for k, v in shuffled_fields
             )
             lines.append(fields)

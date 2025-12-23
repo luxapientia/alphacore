@@ -26,6 +26,7 @@ GCP_CREDS_FILE=""
 ENABLE_LLM="true"
 LLM_FALLBACK="false"
 OPENAI_API_KEY_ARG=""
+PROMPT_POSTPROCESS="${ALPHACORE_PROMPT_POSTPROCESS:-none}"
 
 SKIP_REGISTER="true"
 AUTO_CONFIRM="false"
@@ -70,6 +71,7 @@ Options:
   --disable-llm            Disable LLM prompt generation
   --allow-llm-fallback     Allow deterministic fallback if LLM fails
   --openai-api-key KEY     Write OpenAI key into the env file (chmod 600)
+  --prompt-postprocess MODE  Prompt postprocessing: none|minimal|full (default: none)
 
   --register               Run btcli registration step (default: skipped)
   --yes                    Auto-confirm registration prompts
@@ -177,6 +179,7 @@ while [[ $# -gt 0 ]]; do
     --disable-llm) ENABLE_LLM="false"; shift ;;
     --allow-llm-fallback) LLM_FALLBACK="true"; shift ;;
     --openai-api-key) OPENAI_API_KEY_ARG="$2"; shift 2 ;;
+    --prompt-postprocess) PROMPT_POSTPROCESS="$2"; shift 2 ;;
 
     --register) SKIP_REGISTER="false"; shift ;;
     --yes|-y) AUTO_CONFIRM="true"; shift ;;
@@ -302,6 +305,14 @@ if [[ "$ENABLE_LLM" == "true" ]]; then
   fi
 fi
 
+case "${PROMPT_POSTPROCESS}" in
+  none|minimal|full) ;;
+  *)
+    echo "[launch_validator] Invalid --prompt-postprocess: ${PROMPT_POSTPROCESS} (expected none|minimal|full)" >&2
+    exit 1
+    ;;
+esac
+
 infer_validator_venv
 
 CONFIG_PATH="$REPO_ROOT/modules/task_config.yaml"
@@ -340,6 +351,7 @@ ALPHACORE_PRE_GENERATED_TASKS="0"
 
 ALPHACORE_ENABLE_LLM="${ENABLE_LLM}"
 ALPHACORE_LLM_FALLBACK="${LLM_FALLBACK}"
+ALPHACORE_PROMPT_POSTPROCESS="${PROMPT_POSTPROCESS}"
 ENVFILE
 
 if [[ -n "$LOOP_MODE" ]]; then

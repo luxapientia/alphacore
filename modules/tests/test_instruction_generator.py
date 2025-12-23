@@ -56,6 +56,7 @@ class TestTaskInstructionGeneratorInit:
             "ALPHACORE_LLM_TEMPERATURE": "0.9",
             "ALPHACORE_LLM_RETRIES": "3",
             "ALPHACORE_ENABLE_LLM": "false",
+            "ALPHACORE_PROMPT_POSTPROCESS": "minimal",
         }):
             generator = TaskInstructionGenerator()
             assert generator.model == "test-model"

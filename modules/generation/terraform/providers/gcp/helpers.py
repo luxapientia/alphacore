@@ -38,13 +38,14 @@ BUCKET_LOCATIONS = (
 BUCKET_STORAGE_CLASSES = ("STANDARD", "NEARLINE", "COLDLINE")
 ARTIFACT_LOCATIONS = ("us-central1", "us-east1", "us-west1", "europe-west1", "asia-southeast1")
 ARTIFACT_FORMATS = ("DOCKER", "PYTHON")
-BUCKET_IAM_ROLES = ("roles/storage.objectViewer", "roles/storage.objectAdmin", "roles/storage.legacyBucketReader")
-PROJECT_IAM_ROLES = ("roles/viewer", "roles/editor", "roles/compute.instanceAdmin.v1")
+# Validation should require read-only permissions; keep generated IAM roles conservative.
+BUCKET_IAM_ROLES = ("roles/storage.objectViewer",)
+PROJECT_IAM_ROLES = ("roles/viewer",)
 PUBSUB_RETENTION_WINDOWS = ("600s", "900s", "1200s")
 PUBSUB_ACK_DEADLINES = (10, 20, 30, 60)
 PUBSUB_EXPIRATION_TTLS = ("86400s", "172800s", "259200s")
 SCHEDULER_JOB_SCHEDULES = ("*/5 * * * *", "*/10 * * * *", "*/15 * * * *", "0 * * * *")
-SECRET_IAM_ROLES = ("roles/secretmanager.secretAccessor", "roles/secretmanager.secretVersionAdder", "roles/secretmanager.secretVersionManager")
+SECRET_IAM_ROLES = ("roles/secretmanager.secretAccessor",)
 LOGGING_FILTERS = (
     'resource.type="gce_instance"',
     'severity="ERROR"',
@@ -59,7 +60,7 @@ CUSTOM_ROLE_PERMISSION_SETS = (
     ["compute.instances.get"],
     ["pubsub.topics.list", "pubsub.topics.get"],
 )
-SERVICE_ACCOUNT_IAM_ROLES = ("roles/iam.serviceAccountUser", "roles/iam.serviceAccountTokenCreator", "roles/iam.workloadIdentityUser")
+SERVICE_ACCOUNT_IAM_ROLES = ("roles/iam.serviceAccountViewer",)
 
 _STARTUP_SCRIPT_TEMPLATES = (
     "#!/bin/bash\nset -euo pipefail\necho '{token}' > /var/tmp/acore-token\n",
