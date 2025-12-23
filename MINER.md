@@ -6,6 +6,24 @@ Contributors are expected to implement their own miner logic and point the launc
 
 Today tasks largely target Terraform on GCP, but miners should expect additional clouds, decentralized providers, and task types beyond Terraform generation over time.
 
+## Synapses
+
+AlphaCore miners expose a small set of Bittensor synapses (see `subnet/protocol.py` and the starter implementation in `neurons/miner.py`):
+
+- `StartRoundSynapse` — round handshake / liveness check from the validator.
+  - Miner sets: `is_ready`, `available_capacity`, `miner_version`, `error_message`.
+- `TaskSynapse` — the actual task request.
+  - Validator sends: `task_id` + natural-language `prompt` (prompt-only; no invariants).
+  - Miner responds: `result_summary` (an `ACResult` dict), optional `evidence_hint`, and optionally `workspace_zip_b64` (base64 ZIP + metadata).
+- `TaskFeedbackSynapse` — feedback after evaluation.
+  - Validator sends: `score` (`0..1`), `latency_seconds`, optional `feedback_text` / `suggestions`.
+  - Miner responds: `acknowledged=true`.
+- `TaskCleanupSynapse` — post-validation cleanup hook.
+  - Validator sends: `validation_response` (score + log URLs/paths).
+  - Miner responds: `acknowledged=true`, `cleanup_ok=true|false`, optional `error_message`.
+
+The base miner also runs per-synapse `blacklist_*` and `priority_*` hooks (e.g. minimum stake / validator permit checks). These are configurable via miner launch flags like `--min-stake`, `--no-force-validator-permit`, and `--allow-non-registered`.
+
 ## Launch (PM2)
 
 ```bash
@@ -28,7 +46,7 @@ Logs:
 pm2 logs miner-test-netuid123
 ```
 
-## Use your own entrypoint (`miney.py`)
+## Example launch
 
 Point the launcher at your file:
 
