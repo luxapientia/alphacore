@@ -37,6 +37,6 @@ def get_templates() -> list[ResourceTemplate]:
             kind="artifact registry repo",
             provides=("artifact_repository",),
             builder=_build_repository,
-            base_hints=("Document the repository description and format.",),
+            base_hints=("Keep the repository minimal; ensure the package format matches the request.",),
         )
     ]

@@ -338,6 +338,42 @@ class TestTextFormatting:
         assert "2" in required
         assert "two" in required
 
+    def test_normalize_prompt_phrasing_avoids_self_referential_description(self):
+        """Avoid self-referential phrasing like 'records the repository description'."""
+        task = _create_test_task()
+        text = (
+            "Include a concise repository description that records the repository description and format. "
+            "Submit a single zip archive of the repository; keep the Terraform config at the repository root and include terraform.tfstate at the repository root."
+        )
+        normalized = TaskInstructionGenerator._normalize_prompt_phrasing(text, task)
+        assert "records the repository description" not in normalized.lower()
+
+    def test_downcase_invariant_enum_tokens(self):
+        """Enum-like invariant values should be downcased in miner-facing prompts."""
+        task = _create_test_task()
+        task.spec.invariants = [
+            Invariant(
+                resource_type="google_artifact_registry_repository",
+                match={
+                    "values.location": "US-CENTRAL1",
+                    "values.format": "PYTHON",
+                },
+            ),
+            Invariant(
+                resource_type="google_storage_bucket",
+                match={
+                    "values.location": "US-WEST1",
+                    "values.storage_class": "COLDLINE",
+                },
+            ),
+        ]
+        text = "Create a repo with format PYTHON in US-CENTRAL1 and a bucket in US-WEST1 using COLDLINE."
+        out = TaskInstructionGenerator._downcase_invariant_enum_tokens(text, task)
+        assert "python" in out
+        assert "us-central1" in out
+        assert "us-west1" in out
+        assert "coldline" in out
+
 
 class TestProviderFormatting:
     """Test provider-specific formatting."""

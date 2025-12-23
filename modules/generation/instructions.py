@@ -69,6 +69,8 @@ _DISALLOWED_TERM_PATTERNS: dict[str, re.Pattern[str]] = {
     "walkthrough": re.compile(r"\bwalkthroughs?\b", flags=re.IGNORECASE),
 }
 
+_UPPER_ENUM_TOKEN_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{2,}$")
+
 
 class TaskInstructionGenerator:
     """
@@ -360,6 +362,7 @@ class TaskInstructionGenerator:
             started = time.time()
             fallback = self._fallback_instructions(task)
             fallback = self._normalize_prompt_phrasing(fallback, task)
+            fallback = self._downcase_invariant_enum_tokens(fallback, task)
             fallback = self._ensure_provider_reference(fallback, task)
             validated = self._enforce_allowed_content(fallback, task)
             try:
@@ -455,6 +458,7 @@ class TaskInstructionGenerator:
             "Write like a real internal ticket: brief context, then what to provision. "
             "Include all pinned identifiers and values somewhere in the text, but do NOT present them as a rigid "
             "'field equals value' specification. Prefer outcome phrasing. "
+            "When mentioning enum-like configuration values (e.g., formats, storage classes, directions), prefer lowercase words in the narrative. "
             "Do not start with policy-like lines such as 'All resources must…'. "
             "Avoid lecturing tone and avoid repeating 'Ensure…' every sentence. "
             "Avoid phrases like 'Pin the resource' and avoid listing raw attribute/value pairs; write natural sentences instead. "
@@ -558,6 +562,7 @@ class TaskInstructionGenerator:
                     cleaned = self._to_plain_text(raw_message)
                     cleaned, auto_fixed_startup_shebang = self._repair_startup_shebang(cleaned, task)
                     cleaned = self._normalize_prompt_phrasing(cleaned, task)
+                    cleaned = self._downcase_invariant_enum_tokens(cleaned, task)
                     cleaned = self._ensure_provider_reference(cleaned, task)
                     auto_fixed_disallowed_terms: list[str] = []
                     usage_total_tokens_all_attempts = 0
@@ -947,6 +952,16 @@ class TaskInstructionGenerator:
             "Keep the topic standalone (no extra resources).",
             out,
         )
+        out = re.sub(
+            r"(?i)\b(records?|documents?) the (repository )?description\b",
+            "notes the purpose",
+            out,
+        )
+        out = re.sub(
+            r"(?i)\bnotes the purpose and format\b",
+            "notes the purpose and package format",
+            out,
+        )
 
         # Strip mail-like "Subject:" headers if the model produces them.
         out = re.sub(r"(?im)^\s*subject:\s*[^\n]*\n+", "", out).strip()
@@ -985,6 +1000,41 @@ class TaskInstructionGenerator:
         out = TaskInstructionGenerator._normalize_submission_instructions(out, task)
         out = re.sub(r"\s+", " ", out).strip()
         return out.strip()
+
+    @staticmethod
+    def _downcase_invariant_enum_tokens(text: str, task: TerraformTask) -> str:
+        """
+        Prefer lowercase for enum-like invariant values in the final prompt.
+
+        We keep invariants themselves in canonical form for validation (often uppercase),
+        but miner-facing text reads better in lowercase (e.g., "python" vs "PYTHON").
+        """
+        if not text:
+            return text
+
+        tokens: set[str] = set()
+        for invariant in getattr(getattr(task, "spec", None), "invariants", []) or []:
+            match = getattr(invariant, "match", None) or {}
+            if not isinstance(match, dict):
+                continue
+            for value in match.values():
+                if not isinstance(value, str):
+                    continue
+                candidate = value.strip()
+                if not candidate or len(candidate) < 3:
+                    continue
+                if "@" in candidate or "." in candidate or "/" in candidate:
+                    continue
+                if _UPPER_ENUM_TOKEN_RE.fullmatch(candidate) and any(ch.isalpha() for ch in candidate):
+                    tokens.add(candidate)
+
+        out = text
+        for token in sorted(tokens, key=len, reverse=True):
+            escaped = re.escape(token)
+            # Avoid `\b` because hyphens are non-word chars and can split tokens like `US-CENTRAL1`.
+            pattern = re.compile(rf"(?<![A-Za-z0-9]){escaped}(?![A-Za-z0-9])", flags=re.IGNORECASE)
+            out = pattern.sub(token.lower(), out)
+        return out
 
     @staticmethod
     def _submission_sentence(task: TerraformTask) -> str:
@@ -1251,7 +1301,26 @@ class TaskInstructionGenerator:
                     continue
             pinned.add(term)
 
-        return pinned
+        return {TaskInstructionGenerator._llm_friendly_required_token(term) for term in pinned}
+
+    @staticmethod
+    def _llm_friendly_required_token(token: str) -> str:
+        """
+        Rewrite a required token into a more natural form for the LLM prompt.
+
+        This does not affect invariant enforcement/validation (which is case-insensitive
+        in prompt checks), but it helps keep the miner-facing prompt readable.
+        """
+        raw = (token or "").strip()
+        if not raw:
+            return raw
+        if len(raw) < 3:
+            return raw
+        if "@" in raw or "." in raw or "/" in raw:
+            return raw
+        if _UPPER_ENUM_TOKEN_RE.fullmatch(raw) and any(ch.isalpha() for ch in raw):
+            return raw.lower()
+        return raw
 
     @staticmethod
     def _iter_match_terms(field: str, value: object) -> Iterable[str]:

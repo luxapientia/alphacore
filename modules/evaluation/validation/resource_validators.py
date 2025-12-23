@@ -516,6 +516,79 @@ def _validate_iam_member_prefix(
     return result
 
 
+def _validate_cloud_scheduler_job(
+    invariant: Invariant,
+    resource: Dict[str, Any],
+    parser: TerraformStateParser,
+) -> InvariantValidation:
+    """
+    Cloud Scheduler jobs can expand Pub/Sub topic names into full resource paths.
+    """
+    result = InvariantValidation(
+        resource_type=invariant.resource_type,
+        invariant_match=invariant.match,
+        passed=True,
+        actual_values={},
+    )
+
+    for path, expected_value in invariant.match.items():
+        actual_value = parser.get_resource_attribute(resource, path)
+        result.actual_values[path] = actual_value
+
+        if path.endswith(".pubsub_target.0.topic_name") or path.endswith("values.pubsub_target.0.topic_name"):
+            if _matches_ref(actual_value, expected_value):
+                continue
+            result.passed = False
+            result.errors.append(f"{path}: expected topic_name '{expected_value}', got '{actual_value}'")
+            continue
+
+        if actual_value != expected_value:
+            result.passed = False
+            result.errors.append(f"{path}: expected '{expected_value}', got '{actual_value}'")
+
+    return result
+
+
+def _validate_project_iam_custom_role(
+    invariant: Invariant,
+    resource: Dict[str, Any],
+    parser: TerraformStateParser,
+) -> InvariantValidation:
+    """
+    Custom role permissions can behave like an unordered collection in state.
+
+    We validate that the required permission appears in the permissions list rather
+    than relying on a stable index.
+    """
+    result = InvariantValidation(
+        resource_type=invariant.resource_type,
+        invariant_match=invariant.match,
+        passed=True,
+        actual_values={},
+    )
+
+    attrs = resource.get("attributes", {}) if isinstance(resource, dict) else {}
+    permissions = (attrs or {}).get("permissions") or []
+
+    for path, expected_value in invariant.match.items():
+        if path.endswith(".permissions.0") or path.endswith("values.permissions.0"):
+            result.actual_values[path] = permissions
+            expected_str = _as_str(expected_value)
+            if expected_str and any(_as_str(p) == expected_str for p in (permissions or [])):
+                continue
+            result.passed = False
+            result.errors.append(f"{path}: expected permissions containing '{expected_value}', got '{permissions}'")
+            continue
+
+        actual_value = parser.get_resource_attribute(resource, path)
+        result.actual_values[path] = actual_value
+        if actual_value != expected_value:
+            result.passed = False
+            result.errors.append(f"{path}: expected '{expected_value}', got '{actual_value}'")
+
+    return result
+
+
 # Validator function type
 ValidatorFunc = Callable[[Invariant, Dict[str, Any], TerraformStateParser], InvariantValidation]
 
@@ -527,6 +600,7 @@ _VALIDATORS: Dict[str, ValidatorFunc] = {
     "google_compute_firewall": _validate_compute_firewall,
     "google_compute_instance": _validate_compute_instance,
     "google_dns_record_set": _validate_dns_record_set,
+    "google_cloud_scheduler_job": _validate_cloud_scheduler_job,
     "google_pubsub_subscription": _validate_pubsub_subscription,
     "google_secret_manager_secret_version": _validate_secret_manager_secret_version,
     "google_secret_manager_secret_iam_member": _validate_secret_manager_secret_iam_member,
@@ -534,6 +608,7 @@ _VALIDATORS: Dict[str, ValidatorFunc] = {
     "google_storage_bucket_object": _validate_storage_bucket_object,
     "google_project_iam_member": _validate_iam_member_prefix,
     "google_storage_bucket_iam_member": _validate_iam_member_prefix,
+    "google_project_iam_custom_role": _validate_project_iam_custom_role,
 }
 
 

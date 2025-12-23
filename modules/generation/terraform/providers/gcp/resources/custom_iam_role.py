@@ -22,7 +22,7 @@ def _build_custom_role(ctx: TemplateContext) -> ResourceInstance:
             "values.permissions.0": permissions[0],
         },
     )
-    hint = f"Create a custom IAM role {role_id} with permissions {permissions}."
+    hint = f"Create a custom IAM role {role_id} including permission {permissions[0]} (keep permissions minimal)."
     return ResourceInstance(
         invariants=[invariant],
         prompt_hints=[hint],
