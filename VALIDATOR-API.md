@@ -21,6 +21,10 @@ The `result` payload usually includes `passed_invariants` and `total_invariants`
 
 ## One-time host provisioning (required for Firecracker jobs)
 
+Tested host OSe
+- Ubuntu 22.04
+- Debian 12
+
 On the machine that will run the Validation API:
 
 ```bash

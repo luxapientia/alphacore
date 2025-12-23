@@ -44,6 +44,17 @@ bash scripts/miner/process/launch_miner.sh \
   --entrypoint miney.py
 ```
 
+For runs on testnet:
+```bash
+  bash scripts/miner/process/launch_miner.sh \
+    --network test --netuid 348 \
+    --wallet-name <wallet.name> --hotkey <wallet.hotkey> --wallet-path "$HOME/.bittensor/wallets" \
+    --axon-port 8091 --external-ip <external_ip> \
+    --no-force-validator-permit \
+    --min-stake 0 \
+    --allow-non-registered
+```
+
 The PM2 wrapper:
 - sources the generated env file under `env/<network>/`
 - activates `venv/`

@@ -815,7 +815,7 @@ class Validator(
 			except Exception as exc:
 				bt.logging.debug(f"Settlement skipped/failed: {exc}")
 
-				round_completed = True
+			round_completed = True
 
 		finally:
 			if round_started:
