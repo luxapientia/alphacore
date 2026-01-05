@@ -122,6 +122,9 @@ class TaskEvaluationMixin:
 
                         synapse = by_task.get(task_id)
                         if synapse is None:
+                            uid_attempts[str(task_id)] = {"status": "no_response"}
+                            uid_total_score += 0.0
+                            uid_eval_count += 1
                             continue
 
                         zip_b64 = getattr(synapse, "workspace_zip_b64", None)
