@@ -199,7 +199,7 @@ settings:
 
   # LLM instruction generation
   llm:
-    enabled: false  # Set to true to use LLM (requires OPENAI_API_KEY), false uses deterministic fallback
+    enabled: true  # Set to false to use deterministic fallback
     model: gpt-5-mini
     temperature: 0.6
     fallback_on_failure: true
