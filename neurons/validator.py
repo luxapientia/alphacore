@@ -251,7 +251,11 @@ class Validator(
 		self._last_round_epoch_started = None
 		# Optional: stagger round starts across the epoch in N slots so multiple
 		# validators do not all dispatch at the same time.
-		self._epoch_slots = max(1, int(self._env_int("ALPHACORE_EPOCH_SLOTS", default=1)))
+		config_epoch_slots = self._config_int("validator.epoch_slots")
+		if config_epoch_slots is not None:
+			self._epoch_slots = max(1, int(config_epoch_slots))
+		else:
+			self._epoch_slots = max(1, int(self._env_int("ALPHACORE_EPOCH_SLOTS", default=1)))
 		try:
 			if self._epoch_slots > 1:
 				slot_index = self._epoch_slot_index(self._epoch_slots)
@@ -296,8 +300,25 @@ class Validator(
 			return default
 		return raw.strip().lower() in ("1", "true", "yes", "y", "on")
 
+	def _config_int(self, key: str) -> Optional[int]:
+		node = getattr(self, "config", None)
+		for part in key.split("."):
+			node = getattr(node, part, None)
+			if node is None:
+				return None
+		try:
+			return int(node)
+		except Exception:
+			return None
+
 	def _epoch_slot_index(self, slot_count: int) -> int:
 		slot_count = max(1, int(slot_count))
+		config_override = self._config_int("validator.epoch_slot_index")
+		if config_override is not None:
+			try:
+				return int(config_override) % slot_count
+			except Exception:
+				pass
 		override = os.getenv("ALPHACORE_EPOCH_SLOT_INDEX")
 		if override is not None and str(override).strip():
 			try:
