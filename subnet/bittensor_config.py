@@ -88,6 +88,19 @@ def add_validator_args(parser: argparse.ArgumentParser) -> None:
         default=False,
     )
 
+    parser.add_argument(
+        "--validator.epoch_slots",
+        type=int,
+        default=None,
+        help="Number of slots per epoch for validator round starts.",
+    )
+    parser.add_argument(
+        "--validator.epoch_slot_index",
+        type=int,
+        default=None,
+        help="Override which slot (0-based) this validator uses within the epoch.",
+    )
+
 
 def add_miner_args(parser: argparse.ArgumentParser) -> None:
     """Default miner arguments."""
