@@ -133,8 +133,9 @@ bash scripts/validator/process/launch_validation_api.sh \
 
 ```bash
 bash scripts/validator/process/launch_validator.sh \
-  --wallet-name <wallet-name> \
-  --hotkey <hotkey-name> \
+  --wallet.name <wallet-name> \
+  --wallet.hotkey <hotkey-name> \
+  --network finney \
   --netuid 66 \
   --gcp-creds-file /path/to/alphacore/gcp-creds.json \
   --validator.epoch_slots 4 \
