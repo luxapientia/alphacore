@@ -234,7 +234,7 @@ LATENCY_TIE_PENALTY_MAX = _env_float("ALPHACORE_LATENCY_TIE_PENALTY_MAX", 0.1)
 
 # Logging and monitoring --------------------------------------------------- #
 
-LOG_LEVEL = os.getenv("ALPHACORE_LOG_LEVEL", "DEBUG" if TESTING else "INFO")
+LOG_LEVEL = os.getenv("ALPHACORE_LOG_LEVEL", "DEBUG")
 LOG_ROUND_SUMMARIES = _str_to_bool(
     os.getenv("ALPHACORE_LOG_ROUND_SUMMARIES", "true")
 )
@@ -243,7 +243,7 @@ EXPORT_ROUND_STATS = _str_to_bool(
 )
 STATS_EXPORT_DIR = os.getenv("ALPHACORE_STATS_EXPORT_DIR", "./logs/stats")
 VERBOSE_TASK_LOGGING = _str_to_bool(
-    os.getenv("ALPHACORE_VERBOSE_TASK_LOGGING", "true" if TESTING else "false")
+    os.getenv("ALPHACORE_VERBOSE_TASK_LOGGING", "true")
 )
 # While dispatching tasks with long timeouts, the validator can appear "stuck"
 # in logs (it is just awaiting miner responses). Emit periodic progress logs so

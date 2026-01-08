@@ -185,6 +185,7 @@ class TaskDispatchMixin:
             latency_map: Dict[Tuple[int, str], float] = {}
             successful = 0
 
+            target_by_uid = {int(uid): ax for uid, ax in (targets or [])}
             failures: Dict[Tuple[int, str], Dict[str, Optional[str]]] = {}
             for uid, task_id, response, latency, status, error in send_results:
                 responses_dict.setdefault(uid, {})[task_id] = response
@@ -194,6 +195,17 @@ class TaskDispatchMixin:
                         "reason": str(status),
                         "error": error,
                     }
+                    ax = target_by_uid.get(int(uid))
+                    if ax is not None:
+                        bt.logging.info(
+                            f"✗ Dispatch failed: uid={uid} "
+                            f"axon={getattr(ax, 'ip', None)}:{getattr(ax, 'port', None)} "
+                            f"status={status} error={error}"
+                        )
+                    else:
+                        bt.logging.info(
+                            f"✗ Dispatch failed: uid={uid} status={status} error={error}"
+                        )
 
                 if response is not None:
                     successful += 1

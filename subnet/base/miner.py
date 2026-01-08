@@ -96,22 +96,10 @@ class BaseMinerNeuron(BaseNeuron):
             f"Serving miner axon {self.axon} on network: {self.config.subtensor.chain_endpoint} with netuid: {self.config.netuid}"
         )
 
-        # Bittensor defaults to MEV protection for extrinsics; local subtensor chains often
-        # don't include the MEV shield pallet, which causes "Invalid Transaction" errors.
-        chain_endpoint = getattr(self.config.subtensor, "chain_endpoint", "") or ""
-        is_local_chain = "127.0.0.1" in chain_endpoint or "localhost" in chain_endpoint
-        mev_env = os.getenv("ALPHACORE_MEV_PROTECTION")
-        if mev_env is not None and mev_env != "":
-            mev_protection = mev_env.strip().lower() in ("1", "true", "yes", "y", "on")
-        else:
-            mev_protection = not is_local_chain
-
         try:
-            # Call subtensor.serve_axon directly so we can disable MEV protection if needed.
             resp = self.subtensor.serve_axon(
                 netuid=self.config.netuid,
                 axon=self.axon,
-                mev_protection=mev_protection,
             )
             if hasattr(resp, "success") and resp.success is False:
                 bt.logging.warning(f"serve_axon failed: {getattr(resp, 'message', 'unknown error')}")
