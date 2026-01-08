@@ -136,6 +136,17 @@ infer_validator_venv() {
   VENV_DIR="$REPO_ROOT/venv"
 }
 
+infer_validator_version() {
+  if [[ -f "$REPO_ROOT/VERSION" ]]; then
+    VALIDATOR_VERSION="$(tr -d ' \t\r\n' <"$REPO_ROOT/VERSION")"
+    if [[ -n "$VALIDATOR_VERSION" ]]; then
+      return 0
+    fi
+  fi
+  VALIDATOR_VERSION="0.0.0"
+  echo "[launch_validator] Missing VERSION file or empty VERSION value; using ${VALIDATOR_VERSION}." >&2
+}
+
 infer_validator_sa_from_creds() {
   local creds_file="$1"
   if [[ -z "$creds_file" || ! -f "$creds_file" ]]; then
@@ -337,6 +348,7 @@ case "${PROMPT_POSTPROCESS}" in
 esac
 
 infer_validator_venv
+infer_validator_version
 
 CONFIG_PATH="$REPO_ROOT/modules/task_config.yaml"
 cat >"$ENV_OUT" <<ENVFILE
@@ -357,6 +369,7 @@ ALPHACORE_HTTP_HOST="${HTTP_HOST}"
 ALPHACORE_HTTP_PORT="${HTTP_PORT}"
 ALPHACORE_CONFIG="${CONFIG_PATH}"
 ALPHACORE_VALIDATOR_SA="${VALIDATOR_SA}"
+ALPHACORE_VALIDATOR_VERSION="${VALIDATOR_VERSION}"
 
 ALPHACORE_BT_LOGGING_LEVEL="info"
 

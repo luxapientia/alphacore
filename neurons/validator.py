@@ -38,6 +38,7 @@ from subnet.validator.config import (
 	WEIGHTS_EMIT_POLL_SECONDS,
 	WEIGHTS_MIN_TASKS_BEFORE_EMIT,
 	WEIGHTS_EMIT_BLOCK_OFFSET,
+	VALIDATOR_VERSION,
 )
 from subnet.validator.dispatch.mixin import TaskDispatchMixin
 from subnet.validator.evaluation.mixin import TaskEvaluationMixin
@@ -475,7 +476,11 @@ class Validator(
 		round_id = f"local-test-{int(time.time())}"
 		bt.logging.info(f"🧪 Local test: sending StartRoundSynapse to {len(axons)} miner(s)")
 
-		handshake = StartRoundSynapse(round_id=round_id, timestamp=int(time.time()))
+		handshake = StartRoundSynapse(
+			round_id=round_id,
+			timestamp=int(time.time()),
+			validator_version=VALIDATOR_VERSION,
+		)
 		handshake_resps = await self._dendrite_request(
 			axons=axons,
 			synapse=handshake,
