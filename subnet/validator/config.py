@@ -49,7 +49,7 @@ def _env_value(key: str, cast: Callable[[str], Any], default: Any) -> Any:
 
 # Environment profile (local | testing | production) ---------------------- #
 # Controls default values across the validator configuration.
-ENVIRONMENT = os.getenv("ALPHACORE_ENV", "local").strip().lower()
+ENVIRONMENT = os.getenv("ALPHACORE_ENV", "testing").strip().lower()
 
 if ENVIRONMENT not in {"local", "testing", "production"}:
     ENVIRONMENT = "local"
@@ -80,12 +80,12 @@ elif ENVIRONMENT == "testing":
     SKIP_ROUND_AFTER_DEFAULT = 0.95
 else:  # production
     ROUND_CADENCE_DEFAULT = 30  # seconds
-    ROUND_SIZE_EPOCHS_DEFAULT = 3.0
-    SAFETY_BUFFER_EPOCHS_DEFAULT = 0.5
-    AVG_TASK_DURATION_DEFAULT = 150
-    PRE_GENERATED_TASKS_DEFAULT = 75
-    STOP_TASK_EVAL_DEFAULT = 0.90
-    SKIP_ROUND_AFTER_DEFAULT = 0.30
+    ROUND_SIZE_EPOCHS_DEFAULT = 0.347
+    SAFETY_BUFFER_EPOCHS_DEFAULT = 0.02
+    AVG_TASK_DURATION_DEFAULT = 300
+    PRE_GENERATED_TASKS_DEFAULT = 0
+    STOP_TASK_EVAL_DEFAULT = 0.65
+    SKIP_ROUND_AFTER_DEFAULT = 0.95
 
 # Burn mechanism (reward distribution) ------------------------------------ #
 # UID that receives burned tokens (default: UID 0)
@@ -234,7 +234,7 @@ LATENCY_TIE_PENALTY_MAX = _env_float("ALPHACORE_LATENCY_TIE_PENALTY_MAX", 0.1)
 
 # Logging and monitoring --------------------------------------------------- #
 
-LOG_LEVEL = os.getenv("ALPHACORE_LOG_LEVEL", "DEBUG" if TESTING else "INFO")
+LOG_LEVEL = os.getenv("ALPHACORE_LOG_LEVEL", "DEBUG")
 LOG_ROUND_SUMMARIES = _str_to_bool(
     os.getenv("ALPHACORE_LOG_ROUND_SUMMARIES", "true")
 )
@@ -243,7 +243,7 @@ EXPORT_ROUND_STATS = _str_to_bool(
 )
 STATS_EXPORT_DIR = os.getenv("ALPHACORE_STATS_EXPORT_DIR", "./logs/stats")
 VERBOSE_TASK_LOGGING = _str_to_bool(
-    os.getenv("ALPHACORE_VERBOSE_TASK_LOGGING", "true" if TESTING else "false")
+    os.getenv("ALPHACORE_VERBOSE_TASK_LOGGING", "true")
 )
 # While dispatching tasks with long timeouts, the validator can appear "stuck"
 # in logs (it is just awaiting miner responses). Emit periodic progress logs so

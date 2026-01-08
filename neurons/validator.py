@@ -607,6 +607,7 @@ class Validator(
 					):
 						self._with_subtensor(self.metagraph.sync, subtensor=self.subtensor, lite=False)
 						self._last_metagraph_sync_at = now
+						bt.logging.info("🔁 Metagraph resync completed")
 				except Exception as exc:
 					bt.logging.debug(f"Failed to refresh metagraph: {exc}")
 
