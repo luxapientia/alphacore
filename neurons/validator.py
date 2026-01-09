@@ -9,7 +9,7 @@ Implements the complete validator lifecycle with improved patterns from Autoppia
 5. EXECUTION: Wait for miner responses
 6. EVALUATION: Compute scores and save progress
 7. FEEDBACK: Send per-task feedback for real-time learning (Autoppia pattern)
-8. FINALIZATION: Set weights based on scores
+8. FINALIZATION: Emit weights via epoch-synced emitter
 
 """
 
@@ -72,7 +72,7 @@ class Validator(
 	4. EXECUTION: Wait for miner responses
 	5. EVALUATION: Compute scores incrementally
 	6. FEEDBACK: Send per-task scores for real-time learning
-	7. FINALIZATION: Set weights based on scores
+	7. FINALIZATION: Emit weights via epoch-synced emitter
 
 	Hybrid approach combines:
 	- AlphaCore: Batch parallel dispatch, simple logic
@@ -748,7 +748,7 @@ class Validator(
 		4. EXECUTION: Wait for responses
 		5. EVALUATION: Score miners incrementally
 		6. FEEDBACK: Send per-task feedback (real-time learning)
-		7. FINALIZATION: Set weights based on scores
+	7. FINALIZATION: Emit weights via epoch-synced emitter
 
 		"""
 		round_started = False
