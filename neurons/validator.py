@@ -621,9 +621,17 @@ class Validator(
 		if float(np.max(candidate_scores)) <= 0.0:
 			raise RuntimeError("all candidate scores are zero")
 
-		k = max(1, min(int(k), len(candidates)))
-		top_idx = np.argsort(candidate_scores)[-k:]
-		top_uids = [candidates[int(i)] for i in top_idx]
+		positive_mask = candidate_scores > 0
+		positive_indices = np.nonzero(positive_mask)[0]
+		if positive_indices.size == 0:
+			raise RuntimeError("no positive-scoring candidates for weight emission")
+		k = max(1, min(int(k), int(positive_indices.size)))
+		positive_scores = candidate_scores[positive_indices]
+		bt.logging.info(
+			f"[WEIGHTS] Positive-score candidates: {int(positive_indices.size)}/{int(len(candidates))}"
+		)
+		top_local_idx = np.argsort(positive_scores)[-k:]
+		top_uids = [candidates[int(positive_indices[int(i)])] for i in top_local_idx]
 
 		weights = np.zeros_like(scores, dtype=np.float32)
 		burn_pct = float(BURN_AMOUNT_PERCENTAGE)
