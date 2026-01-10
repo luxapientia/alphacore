@@ -682,7 +682,43 @@ class Validator(
 			try:
 				current_block = int(self.block)
 				tempo = int(getattr(self.round_manager, "tempo", 0) or 0)
+				last_update = None
+				blocks_since = None
+				try:
+					last_update = int(self.metagraph.last_update[self.uid])
+					blocks_since = max(0, int(current_block - last_update))
+				except Exception:
+					last_update = None
+					blocks_since = None
+				if last_update is not None and blocks_since is not None and blocks_since > 4000:
+					bt.logging.info(
+						f"[WEIGHTS] Stale weights detected: last_set={last_update} "
+						f"current={current_block} delta={blocks_since}"
+					)
+					try:
+						self._emit_burn_only_weights(reason=f"stale weights {blocks_since} blocks")
+					except Exception as exc:
+						bt.logging.warning(f"[WEIGHTS] Stale burn-only emit failed: {exc}")
+				else:
+					if last_update is None or blocks_since is None:
+						bt.logging.warning(
+							"[WEIGHTS] Last set block unknown (metagraph last_update unavailable)"
+						)
+					else:
+						bt.logging.info(
+							f"[WEIGHTS] Weights age OK: last_set={last_update} "
+							f"current={current_block} delta={blocks_since}"
+						)
 				if not self._weights_emitter_logged_boot:
+					if last_update is not None:
+						bt.logging.info(
+							f"[WEIGHTS] Last set at block={last_update} "
+							f"(current={current_block}, delta={blocks_since})"
+						)
+					else:
+						bt.logging.warning(
+							"[WEIGHTS] Last set block unknown (metagraph last_update unavailable)"
+						)
 					bt.logging.info(
 						f"[WEIGHTS] Emitter started (offset={int(self._weights_emit_block_offset)}, "
 						f"min_tasks={int(self._weights_min_tasks_before_emit)}, "
@@ -692,23 +728,11 @@ class Validator(
 				if tempo > 0:
 					epoch = int(current_block // tempo)
 					if self._weights_emitter_last_epoch_logged != epoch:
-						try:
-							last_update = int(self.metagraph.last_update[self.uid])
-						except Exception:
-							last_update = None
 						if last_update is not None:
-							blocks_since = max(0, int(current_block - last_update))
 							bt.logging.info(
 								f"[WEIGHTS] Last set at block={last_update} "
 								f"(current={current_block}, delta={blocks_since})"
 							)
-							if blocks_since > 4000:
-								try:
-									self._emit_burn_only_weights(reason=f"stale weights {blocks_since} blocks")
-								except Exception as exc:
-									bt.logging.warning(
-										f"[WEIGHTS] Stale burn-only emit failed: {exc}"
-									)
 						else:
 							bt.logging.warning(
 								"[WEIGHTS] Last set block unknown (metagraph last_update unavailable)"
