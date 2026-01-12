@@ -154,7 +154,7 @@ def create_app() -> FastAPI:
                     stream_log=bool(job_spec["stream_log"]),
                     quiet_kernel=bool(job_spec["quiet_kernel"]),
                     log_path=job_log_path,
-                    env={"GOOGLE_OAUTH_ACCESS_TOKEN": access_token},
+                    access_token=access_token,
                 )
                 result = await pool.run_one(job)
                 result_summary = result.summary if isinstance(result.summary, dict) else {}
