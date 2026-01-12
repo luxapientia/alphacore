@@ -589,22 +589,28 @@ class Validator(
 			except Exception:
 				total_score = 0.0
 			if total_score <= 0.0:
-				self._emit_burn_only_weights(reason="no non-zero scores")
+				success = self._emit_burn_only_weights(reason="no non-zero scores")
 			else:
-				self._emit_top_k_weights()
-			bt.logging.info(
-				f"[WEIGHTS] Check: block={int(current_block)} epoch={int(epoch)} "
-				f"block_in_epoch={int(current_block - epoch * self.round_manager.tempo)} "
-				f"offset={int(self._weights_emit_block_offset)} action=emitted"
-			)
-			self._last_weights_emit_epoch = epoch
-			bt.logging.info(
-				f"✅ [WEIGHTS] Emitted weights on chain (epoch={epoch}, block_in_epoch={int(current_block - epoch * self.round_manager.tempo)})"
-			)
+				success = self._emit_top_k_weights()
+			if success:
+				bt.logging.info(
+					f"[WEIGHTS] Check: block={int(current_block)} epoch={int(epoch)} "
+					f"block_in_epoch={int(current_block - epoch * self.round_manager.tempo)} "
+					f"offset={int(self._weights_emit_block_offset)} action=emitted"
+				)
+				self._last_weights_emit_epoch = epoch
+				bt.logging.info(
+					f"✅ [WEIGHTS] Emitted weights on chain (epoch={epoch}, block_in_epoch={int(current_block - epoch * self.round_manager.tempo)})"
+				)
+			else:
+				bt.logging.warning(
+					f"[WEIGHTS] Emission failed (will retry next eligible window): "
+					f"block={int(current_block)} epoch={int(epoch)}"
+				)
 		except Exception as exc:
 			bt.logging.error(f"✗ [WEIGHTS] Emission failed: {exc}")
 
-	def _emit_burn_only_weights(self, reason: str) -> None:
+	def _emit_burn_only_weights(self, reason: str) -> bool:
 		from subnet.validator.config import BURN_UID
 
 		scores = np.asarray(self.scores, dtype=np.float32)
@@ -620,7 +626,7 @@ class Validator(
 
 		ema_scores = self.scores.copy()
 		try:
-			self.set_weights(weights)
+			return self.set_weights(weights)
 		finally:
 			self.scores = ema_scores
 
@@ -649,7 +655,7 @@ class Validator(
 		else:
 			bt.logging.warning("KVM: /dev/kvm not found (virtualization disabled/unavailable)")
 
-	def _emit_top_k_weights(self, k: int = 5) -> None:
+	def _emit_top_k_weights(self, k: int = 5) -> bool:
 		from subnet.validator.config import BURN_AMOUNT_PERCENTAGE, BURN_UID
 
 		scores = np.asarray(self.scores, dtype=np.float32)
@@ -699,7 +705,7 @@ class Validator(
 
 		ema_scores = self.scores.copy()
 		try:
-			self.set_weights(weights)
+		return self.set_weights(weights)
 		finally:
 			self.scores = ema_scores
 
@@ -708,6 +714,7 @@ class Validator(
 			try:
 				current_block = int(self.block)
 				tempo = int(getattr(self.round_manager, "tempo", 0) or 0)
+				epoch = int(current_block // tempo) if tempo > 0 else None
 				last_update = None
 				blocks_since = None
 				try:
@@ -722,7 +729,16 @@ class Validator(
 						f"current={current_block} delta={blocks_since}"
 					)
 					try:
-						self._emit_burn_only_weights(reason=f"stale weights {blocks_since} blocks")
+						if epoch is not None and self._last_weights_emit_epoch == epoch:
+							bt.logging.info(
+								f"[WEIGHTS] Stale emit skipped: already emitted this epoch (epoch={epoch})"
+							)
+						else:
+							success = self._emit_burn_only_weights(
+								reason=f"stale weights {blocks_since} blocks"
+							)
+							if success and epoch is not None:
+								self._last_weights_emit_epoch = epoch
 					except Exception as exc:
 						bt.logging.warning(f"[WEIGHTS] Stale burn-only emit failed: {exc}")
 				else:
