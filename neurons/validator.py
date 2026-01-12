@@ -705,7 +705,7 @@ class Validator(
 
 		ema_scores = self.scores.copy()
 		try:
-		return self.set_weights(weights)
+			return self.set_weights(weights)
 		finally:
 			self.scores = ema_scores
 
