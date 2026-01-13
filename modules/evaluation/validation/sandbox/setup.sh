@@ -522,8 +522,31 @@ DHCP_START="${ACORE_DHCP_START:-172.16.0.100}"
 DHCP_END="${ACORE_DHCP_END:-172.16.0.199}"
 DHCP_LEASE="12h"
 PROXY_PORT="8888"
-TAP_OWNER_UID="${TAP_OWNER_UID:-${SUDO_UID:-${TERRAFORM_USER}}}"
-TAP_OWNER_GID="${TAP_OWNER_GID:-${SUDO_GID:-${TERRAFORM_USER}}}"
+resolve_uid_gid() {
+  local user="$1"
+  local uid gid
+  uid="$(id -u "$user" 2>/dev/null || true)"
+  gid="$(id -g "$user" 2>/dev/null || true)"
+  if [[ -n "${uid:-}" && -n "${gid:-}" ]]; then
+    echo "${uid}:${gid}"
+    return 0
+  fi
+  return 1
+}
+
+if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then
+  TAP_OWNER_UID="${SUDO_UID}"
+  TAP_OWNER_GID="${SUDO_GID}"
+elif resolve_uid_gid ubuntu >/dev/null; then
+  TAP_OWNER_UID="${TAP_OWNER_UID:-${SUDO_UID:-$(resolve_uid_gid ubuntu | cut -d: -f1)}}"
+  TAP_OWNER_GID="${TAP_OWNER_GID:-${SUDO_GID:-$(resolve_uid_gid ubuntu | cut -d: -f2)}}"
+elif resolve_uid_gid "${TERRAFORM_USER}" >/dev/null; then
+  TAP_OWNER_UID="${TAP_OWNER_UID:-${SUDO_UID:-$(resolve_uid_gid "${TERRAFORM_USER}" | cut -d: -f1)}}"
+  TAP_OWNER_GID="${TAP_OWNER_GID:-${SUDO_GID:-$(resolve_uid_gid "${TERRAFORM_USER}" | cut -d: -f2)}}"
+else
+  TAP_OWNER_UID="${TAP_OWNER_UID:-$(id -u)}"
+  TAP_OWNER_GID="${TAP_OWNER_GID:-$(id -g)}"
+fi
 
 # Detect default egress interface (used by proxy, not by TAP)
 EGRESS_IFACE="$(ip route get 8.8.8.8 2>/dev/null \
@@ -717,7 +740,7 @@ echo "==> Installing systemd service for sandbox networking/proxy..."
 install -m 0755 "${SCRIPT_DIR}/alphacore-sandbox-net.sh" /usr/local/sbin/alphacore-sandbox-net
 install -m 0644 "${SCRIPT_DIR}/alphacore-sandbox-net.service" /etc/systemd/system/alphacore-sandbox-net.service
 
-# Create a default env file once (edit to override ownership/pool size).
+# Create or update the env file (keep ownership aligned with the sudo caller).
 if [ ! -f /etc/default/alphacore-sandbox-net ]; then
   cat > /etc/default/alphacore-sandbox-net <<EOF
 # Optional overrides for /usr/local/sbin/alphacore-sandbox-net
@@ -727,6 +750,25 @@ TAP_OWNER_UID=${TAP_OWNER_UID}
 TAP_OWNER_GID=${TAP_OWNER_GID}
 ACORE_TAP_POOL_SIZE=${TAP_POOL_SIZE}
 EOF
+else
+  tmp="$(mktemp)"
+  awk \
+    -v uid="${TAP_OWNER_UID}" \
+    -v gid="${TAP_OWNER_GID}" \
+    -v pool="${TAP_POOL_SIZE}" \
+    '
+      BEGIN {seen_uid=0; seen_gid=0; seen_pool=0}
+      /^TAP_OWNER_UID=/ {print "TAP_OWNER_UID=" uid; seen_uid=1; next}
+      /^TAP_OWNER_GID=/ {print "TAP_OWNER_GID=" gid; seen_gid=1; next}
+      /^ACORE_TAP_POOL_SIZE=/ {print "ACORE_TAP_POOL_SIZE=" pool; seen_pool=1; next}
+      {print}
+      END {
+        if (!seen_uid) print "TAP_OWNER_UID=" uid
+        if (!seen_gid) print "TAP_OWNER_GID=" gid
+        if (!seen_pool) print "ACORE_TAP_POOL_SIZE=" pool
+      }
+    ' /etc/default/alphacore-sandbox-net > "$tmp"
+  mv "$tmp" /etc/default/alphacore-sandbox-net
 fi
 
 systemctl daemon-reload
