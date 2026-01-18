@@ -11,15 +11,19 @@ Miners should implement their own pipeline inside `_handle_task()`:
   parse prompt → generate Terraform → apply → ensure terraform.tfstate → zip workspace
 """
 
+import asyncio
 import io
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import time
 import threading
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import bittensor as bt
@@ -59,6 +63,25 @@ except ImportError:  # pragma: no cover - allow import in thin dev envs
     PromptParser = None  # type: ignore[assignment,misc]
     PromptParseError = Exception  # type: ignore[assignment,misc]
 
+# Terraform generation for Phase 2 implementation
+try:
+    from neurons.terraform_generator import TerraformGenerator, TerraformGenerationError, TerraformWorkspace
+except ImportError:  # pragma: no cover - allow import in thin dev envs
+    TerraformGenerator = None  # type: ignore[assignment,misc]
+    TerraformGenerationError = Exception  # type: ignore[assignment,misc]
+    TerraformWorkspace = None  # type: ignore[assignment,misc]
+
+
+@dataclass
+class TerraformResult:
+    """Result from terraform command execution."""
+
+    success: bool
+    stdout: str = ""
+    stderr: str = ""
+    error: Optional[str] = None
+    returncode: int = 0
+
 
 class Miner(BaseMinerNeuron):
     """
@@ -88,6 +111,16 @@ class Miner(BaseMinerNeuron):
             except Exception as exc:
                 bt.logging.warning(f"Prompt parser initialization failed: {exc}. Prompt parsing will be skipped.")
                 self._prompt_parser = None
+
+        # Initialize Terraform generator (Phase 2)
+        self._terraform_generator = None
+        if TerraformGenerator is not None:
+            try:
+                self._terraform_generator = TerraformGenerator()
+                bt.logging.info("Terraform generator initialized (Phase 2 enabled)")
+            except Exception as exc:
+                bt.logging.warning(f"Terraform generator initialization failed: {exc}. Terraform generation will be skipped.")
+                self._terraform_generator = None
 
     # ------------------------------------------------------------------ #
     # Handshake / feedback / cleanup (required axon endpoints)
@@ -179,13 +212,36 @@ class Miner(BaseMinerNeuron):
             self._log_incoming("TaskSynapse", synapse, extra={"task_id": getattr(synapse, "task_id", "")})
             self._log_prompt(prompt)
 
+            # Use retry wrapper for iterative error-feedback loop
+            max_retries = self._get_max_retries()
+            retry_enabled = self._env_flag("ALPHACORE_RETRY_ENABLED", default=True)
+
+            if retry_enabled and max_retries > 0:
+            result, evidence = await self._handle_task_with_retry(
+                    task_id=synapse.task_id,
+                    prompt=prompt,
+                    max_retries=max_retries,
+                )
+            else:
+                # Fallback to single attempt if retry disabled
             result, evidence = await self._handle_task(task_id=synapse.task_id, prompt=prompt)
+
             synapse.attach_result(result, evidence=evidence)
 
-            # Attach a minimal ZIP artifact for end-to-end transport testing.
+            # Attach ZIP if task succeeded (Phase 2+)
+            if result.status == "success" and evidence:
+                workspace_path = evidence.attachments.get("workspace_path")
+                if workspace_path:
+                    try:
+                        zip_bytes = self._package_workspace_zip(Path(workspace_path))
+                        if zip_bytes:
+                            synapse.attach_workspace_zip_bytes(zip_bytes, filename=f"{synapse.task_id}.zip")
+                    except Exception as exc:
+                        if bt:
+                            bt.logging.warning(f"Failed to package workspace ZIP: {exc}")
+            elif self._env_flag("ALPHACORE_MINER_RETURN_EXAMPLE_ZIP", default=True):
+                # Fallback: Attach a minimal ZIP artifact for end-to-end transport testing.
             # This is not a scored submission, but it is a concrete example of the expected ZIP transport.
-            # Disable by setting ALPHACORE_MINER_RETURN_EXAMPLE_ZIP=0.
-            if self._env_flag("ALPHACORE_MINER_RETURN_EXAMPLE_ZIP", default=True):
                 if self._env_flag("ALPHACORE_MINER_RETURN_DUMMY_ZIP"):
                     zip_bytes = self._build_dummy_zip(task_id=synapse.task_id, prompt=prompt)
                 else:
@@ -277,6 +333,454 @@ class Miner(BaseMinerNeuron):
                 notes=notes,
             ),
             ACEvidence(task_id=task_id, attachments=evidence_attachments),
+        )
+
+    # ------------------------------------------------------------------ #
+    # Iterative Error-Feedback Loop (Phase 2.5)
+    # ------------------------------------------------------------------ #
+
+    def _get_max_retries(self) -> int:
+        """Get maximum retry attempts from environment variable."""
+        try:
+            return int(os.getenv("ALPHACORE_MAX_RETRIES", "5") or "5")
+        except Exception:
+            return 5
+
+    async def _handle_task_with_retry(
+        self, *, task_id: str, prompt: str, max_retries: int = 5
+    ) -> tuple[ACResult, Optional[ACEvidence]]:
+        """
+        Wrapper that implements iterative error-feedback loop.
+
+        Flow:
+        1. Parse prompt → Generate Terraform → Try terraform apply
+        2. If error → Feed error + original prompt to LLM → Generate fixed version → Retry
+        3. Continue until success or max_retries
+        """
+        original_prompt = prompt
+        error_history: list[dict[str, Any]] = []  # Track errors across retries
+
+        for attempt in range(max_retries):
+            try:
+                # Attempt generation and execution
+                result, evidence = await self._handle_task_single_attempt(
+                    task_id=task_id,
+                    prompt=prompt,
+                    attempt=attempt,
+                    error_history=error_history,
+                )
+
+                # If successful, return immediately
+                if result.status == "success":
+                    if attempt > 0 and bt:
+                        bt.logging.info(f"Task {task_id} succeeded after {attempt} retries")
+                    return result, evidence
+
+                # If not successful, capture error for next iteration
+                error_message = result.notes or "Unknown error"
+                error_history.append(
+                    {
+                        "attempt": attempt,
+                        "error": error_message,
+                        "status": result.status,
+                    }
+                )
+
+                # Generate improved prompt using error feedback (if not last attempt)
+                if attempt < max_retries - 1:
+                    fixed_prompt = await self._generate_fixed_prompt(
+                        original_prompt=original_prompt,
+                        error_history=error_history,
+                        latest_error=error_message,
+                    )
+                    if bt:
+                        bt.logging.info(
+                            f"Task {task_id} attempt {attempt + 1} failed: {error_message[:200]}. Retrying with fixed prompt..."
+                        )
+                    prompt = fixed_prompt
+                else:
+                    if bt:
+                        bt.logging.error(f"Task {task_id} failed after {max_retries} attempts")
+                    return result, evidence
+
+            except Exception as exc:
+                error_message = str(exc)
+                error_history.append(
+                    {
+                        "attempt": attempt,
+                        "error": error_message,
+                        "status": "exception",
+                    }
+                )
+
+                if attempt < max_retries - 1:
+                    fixed_prompt = await self._generate_fixed_prompt(
+                        original_prompt=original_prompt,
+                        error_history=error_history,
+                        latest_error=error_message,
+                    )
+                    if bt:
+                        bt.logging.warning(
+                            f"Task {task_id} attempt {attempt + 1} raised exception: {exc}. Retrying..."
+                        )
+                    prompt = fixed_prompt
+                else:
+                    # Max retries reached, return error
+                    return (
+                        ACResult(
+                            task_id=task_id,
+                            status="error",
+                            notes=f"Failed after {max_retries} attempts. Last error: {error_message}",
+                        ),
+                        None,
+                    )
+
+        # Should never reach here, but just in case
+        return (
+            ACResult(task_id=task_id, status="error", notes="Retry loop exhausted"),
+            None,
+        )
+
+    async def _handle_task_single_attempt(
+        self,
+        *,
+        task_id: str,
+        prompt: str,
+        attempt: int,
+        error_history: list[dict[str, Any]],
+    ) -> tuple[ACResult, Optional[ACEvidence]]:
+        """
+        Single attempt at generating and applying Terraform.
+
+        Returns (result, evidence) where result.status can be:
+        - "success": Terraform applied successfully, tfstate exists
+        - "error": Error occurred (will trigger retry if attempt < max_retries)
+        - "not_implemented": Feature not yet implemented (should not retry)
+        """
+        # Phase 1: Parse prompt
+        parsed_requirements = None
+        if self._prompt_parser:
+            try:
+                parsed_requirements = self._prompt_parser.parse(prompt)
+                if bt:
+                    bt.logging.info(
+                        f"[Attempt {attempt + 1}] Parsed prompt: {len(parsed_requirements.get('resources', []))} resources, "
+                        f"{len(parsed_requirements.get('iam_grants', []))} IAM grants"
+                    )
+            except PromptParseError as e:
+                return (
+                    ACResult(
+                        task_id=task_id,
+                        status="error",
+                        notes=f"Prompt parsing failed: {e}",
+                    ),
+                    None,
+                )
+            except Exception as e:
+                return (
+                    ACResult(
+                        task_id=task_id,
+                        status="error",
+                        notes=f"Prompt parsing exception: {e}",
+                    ),
+                    None,
+                )
+
+        # Phase 2-5: Terraform generation, apply, ZIP packaging
+        if not self._terraform_generator:
+            # Terraform generator not available
+            status = "not_implemented"
+            notes = (
+                "Phase 1 (prompt parsing) complete. "
+                "Terraform generator not available. "
+                f"This was attempt {attempt + 1}."
+            )
+            evidence_attachments = {"kind": "phase1_only", "phase": 1, "attempt": attempt + 1}
+            if parsed_requirements:
+                evidence_attachments["parsed_resources_count"] = len(parsed_requirements.get("resources", []))
+                evidence_attachments["parsed_iam_grants_count"] = len(parsed_requirements.get("iam_grants", []))
+            return (
+                ACResult(task_id=task_id, status=status, notes=notes),
+                ACEvidence(task_id=task_id, attachments=evidence_attachments),
+            )
+
+        if not parsed_requirements:
+            # Cannot generate Terraform without parsed requirements
+            return (
+                ACResult(
+                    task_id=task_id,
+                    status="error",
+                    notes="Cannot generate Terraform: prompt parsing failed or returned no resources",
+                ),
+                None,
+            )
+
+        # Phase 2: Generate Terraform workspace
+        try:
+            workspace = self._terraform_generator.generate_workspace(parsed_requirements)
+            if bt:
+                bt.logging.info(f"[Attempt {attempt + 1}] Generated Terraform workspace at {workspace.path}")
+        except TerraformGenerationError as e:
+            return (
+                ACResult(
+                    task_id=task_id,
+                    status="error",
+                    notes=f"Terraform generation failed: {e}",
+                ),
+                None,
+            )
+        except Exception as e:
+            return (
+                ACResult(
+                    task_id=task_id,
+                    status="error",
+                    notes=f"Terraform generation exception: {e}",
+                ),
+                None,
+            )
+
+        # Phase 3: Run terraform init
+        init_result = await self._run_terraform_init(workspace.path)
+        if not init_result.success:
+            # Cleanup workspace on error
+            import shutil
+            if workspace.path.exists():
+                shutil.rmtree(workspace.path, ignore_errors=True)
+            return (
+                ACResult(
+                    task_id=task_id,
+                    status="error",
+                    notes=f"terraform init failed: {init_result.error}",
+                ),
+                None,
+            )
+
+        # Phase 4: Run terraform apply
+        apply_result = await self._run_terraform_apply(workspace.path)
+        if not apply_result.success:
+            # Cleanup workspace on error
+            import shutil
+            if workspace.path.exists():
+                shutil.rmtree(workspace.path, ignore_errors=True)
+            return (
+                ACResult(
+                    task_id=task_id,
+                    status="error",
+                    notes=f"terraform apply failed: {apply_result.error}",
+                ),
+                None,
+            )
+
+        # Phase 5: Verify tfstate exists
+        tfstate_path = workspace.path / "terraform.tfstate"
+        if not tfstate_path.exists():
+            # Cleanup workspace on error
+            import shutil
+            if workspace.path.exists():
+                shutil.rmtree(workspace.path, ignore_errors=True)
+        return (
+            ACResult(
+                task_id=task_id,
+                    status="error",
+                    notes="terraform.tfstate not found after apply",
+                ),
+                None,
+            )
+
+        # Success! Package workspace info for evidence
+        evidence_attachments = {
+            "kind": "phase2_complete",
+            "phase": 2,
+            "attempt": attempt + 1,
+            "workspace_path": str(workspace.path),
+        }
+
+        return (
+            ACResult(
+                task_id=task_id,
+                status="success",
+                notes=f"Terraform applied successfully (attempt {attempt + 1})",
+            ),
+            ACEvidence(task_id=task_id, attachments=evidence_attachments),
+        )
+
+    async def _generate_fixed_prompt(
+        self,
+        *,
+        original_prompt: str,
+        error_history: list[dict[str, Any]],
+        latest_error: str,
+    ) -> str:
+        """
+        Generate an improved prompt by feeding errors back to LLM.
+
+        This uses the same OpenAI client as prompt parsing, but with
+        a different system message focused on fixing errors.
+        """
+        if not self._prompt_parser or not hasattr(self._prompt_parser, "client"):
+            # Fallback: just append error to prompt (not ideal, but better than nothing)
+            return f"{original_prompt}\n\nPREVIOUS ERROR: {latest_error}\nPlease fix the above error and regenerate the Terraform configuration."
+
+        # Build error history summary (only last 3 errors to avoid token bloat)
+        recent_errors = error_history[-3:] if len(error_history) > 3 else error_history
+        error_summary = "\n".join(
+            [f"Attempt {err['attempt'] + 1}: {err['error'][:500]}" for err in recent_errors]
+        )
+
+        system_message = """You are a Terraform configuration fixer. Given an original prompt and error messages from failed attempts, generate an improved prompt that will produce correct Terraform code.
+
+Your task:
+1. Analyze the original prompt and error messages
+2. Identify what went wrong (validation errors, dependency issues, syntax errors, etc.)
+3. Generate a corrected version of the prompt that will fix these issues
+4. Ensure the corrected prompt is clear, specific, and will generate valid Terraform
+
+Return ONLY the corrected prompt text, nothing else."""
+
+        user_message = f"""ORIGINAL PROMPT:
+{original_prompt}
+
+ERROR HISTORY:
+{error_summary}
+
+LATEST ERROR:
+{latest_error}
+
+Please generate a corrected prompt that addresses these errors and will produce valid Terraform configuration."""
+
+        try:
+            # Get model from prompt parser config
+            model = getattr(self._prompt_parser, "model", "gpt-4o-mini")
+            temperature = 0.3  # Lower temperature for more focused fixes
+
+            response = self._prompt_parser.client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=temperature,
+                max_tokens=2000,
+            )
+
+            fixed_prompt = response.choices[0].message.content.strip()
+            if bt:
+                bt.logging.info(f"Generated fixed prompt (length: {len(fixed_prompt)})")
+            return fixed_prompt
+
+        except Exception as exc:
+            if bt:
+                bt.logging.error(f"Failed to generate fixed prompt: {exc}. Using fallback.")
+            # Fallback: append error to original prompt
+            return f"{original_prompt}\n\nPREVIOUS ERROR: {latest_error}\nPlease fix the error above."
+
+    async def _run_terraform_init(self, workspace_path: Path, timeout: int = 300) -> TerraformResult:
+        """Run terraform init and capture output/errors."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "terraform",
+                "init",
+                "-input=false",
+                "-backend=false",
+                "-no-color",
+                cwd=str(workspace_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=os.environ.copy(),
+            )
+
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+
+            stdout_text = stdout.decode("utf-8", errors="replace")
+            stderr_text = stderr.decode("utf-8", errors="replace")
+
+            if proc.returncode != 0:
+                # Extract error from stderr (last 500 chars for relevance)
+                error_snippet = stderr_text[-500:] if stderr_text else stdout_text[-500:]
+                return TerraformResult(
+                    success=False,
+                    stdout=stdout_text,
+                    stderr=stderr_text,
+                    error=error_snippet,
+                    returncode=proc.returncode,
+                )
+
+            return TerraformResult(
+                success=True,
+                stdout=stdout_text,
+                stderr=stderr_text,
+                returncode=0,
+            )
+
+        except asyncio.TimeoutError:
+            return TerraformResult(
+                success=False,
+                stdout="",
+                stderr="",
+                error=f"terraform init timed out after {timeout}s",
+                returncode=-1,
+            )
+        except Exception as exc:
+            return TerraformResult(
+                success=False,
+                stdout="",
+                stderr="",
+                error=f"terraform init exception: {exc}",
+                returncode=-1,
+            )
+
+    async def _run_terraform_apply(self, workspace_path: Path, timeout: int = 600) -> TerraformResult:
+        """Run terraform apply and capture output/errors."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "terraform",
+                "apply",
+                "-auto-approve",
+                "-no-color",
+                cwd=str(workspace_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=os.environ.copy(),
+            )
+
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+
+            stdout_text = stdout.decode("utf-8", errors="replace")
+            stderr_text = stderr.decode("utf-8", errors="replace")
+
+            if proc.returncode != 0:
+                # Extract error from stderr (last 500 chars for relevance)
+                error_snippet = stderr_text[-500:] if stderr_text else stdout_text[-500:]
+                return TerraformResult(
+                    success=False,
+                    stdout=stdout_text,
+                    stderr=stderr_text,
+                    error=error_snippet,
+                    returncode=proc.returncode,
+                )
+
+            return TerraformResult(
+                success=True,
+                stdout=stdout_text,
+                stderr=stderr_text,
+                returncode=0,
+            )
+
+        except asyncio.TimeoutError:
+            return TerraformResult(
+                success=False,
+                stdout="",
+                stderr="",
+                error=f"terraform apply timed out after {timeout}s",
+                returncode=-1,
+            )
+        except Exception as exc:
+            return TerraformResult(
+                success=False,
+                stdout="",
+                stderr="",
+                error=f"terraform apply exception: {exc}",
+                returncode=-1,
         )
 
     # ------------------------------------------------------------------ #
@@ -414,6 +918,27 @@ class Miner(BaseMinerNeuron):
             self._log_human_block("", [f"prompt={one_line[:max_chars]}… (truncated, total_chars={len(one_line)})"])
             return
         self._log_human_block("", [f"prompt={one_line}"])
+
+    @staticmethod
+    def _package_workspace_zip(workspace_path: Path) -> bytes:
+        """
+        Package Terraform workspace directory into ZIP archive.
+
+        Includes all .tf files and terraform.tfstate at the repository root.
+        """
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            # Add all .tf files
+            for tf_file in workspace_path.glob("*.tf"):
+                if tf_file.is_file():
+                    zf.write(tf_file, arcname=tf_file.name)
+
+            # Add terraform.tfstate if it exists
+            tfstate_path = workspace_path / "terraform.tfstate"
+            if tfstate_path.exists() and tfstate_path.is_file():
+                zf.write(tfstate_path, arcname="terraform.tfstate")
+
+        return buf.getvalue()
 
     @staticmethod
     def _build_dummy_zip(*, task_id: str, prompt: str) -> bytes:
