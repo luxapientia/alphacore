@@ -52,6 +52,13 @@ except ModuleNotFoundError:  # pragma: no cover - allow import in thin dev envs
     sys.path.insert(0, str(repo_root))
     from modules.models import ACResult, ACEvidence
 
+# Prompt parsing for Phase 1 implementation
+try:
+    from neurons.prompt_parser import PromptParser, PromptParseError
+except ImportError:  # pragma: no cover - allow import in thin dev envs
+    PromptParser = None  # type: ignore[assignment,misc]
+    PromptParseError = Exception  # type: ignore[assignment,misc]
+
 
 class Miner(BaseMinerNeuron):
     """
@@ -71,6 +78,16 @@ class Miner(BaseMinerNeuron):
         self._app_heartbeat_stop = threading.Event()
         self._app_heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._app_heartbeat_thread.start()
+
+        # Initialize prompt parser (Phase 1)
+        self._prompt_parser = None
+        if PromptParser is not None:
+            try:
+                self._prompt_parser = PromptParser()
+                bt.logging.info("Prompt parser initialized (Phase 1 enabled)")
+            except Exception as exc:
+                bt.logging.warning(f"Prompt parser initialization failed: {exc}. Prompt parsing will be skipped.")
+                self._prompt_parser = None
 
     # ------------------------------------------------------------------ #
     # Handshake / feedback / cleanup (required axon endpoints)
@@ -211,22 +228,55 @@ class Miner(BaseMinerNeuron):
 
     async def _handle_task(self, *, task_id: str, prompt: str) -> tuple[ACResult, Optional[ACEvidence]]:
         """
-        Placeholder execution.
+        Handle task execution pipeline:
+        Phase 1: Parse prompt → extract structured requirements
+        Phase 2-5: TODO - Generate Terraform, apply, package ZIP
 
-        Replace this with your real miner logic that produces a repository-root Terraform
-        project + `terraform.tfstate`, bundled into the returned ZIP.
+        Currently implements Phase 1 (prompt parsing).
         """
-        _ = prompt
+        parsed_requirements = None
+
+        # Phase 1: Parse prompt into structured requirements
+        if self._prompt_parser is not None:
+            try:
+                parsed_requirements = self._prompt_parser.parse(prompt)
+                if bt:
+                    bt.logging.info(
+                        f"Parsed prompt: {len(parsed_requirements.get('resources', []))} resources, "
+                        f"{len(parsed_requirements.get('iam_grants', []))} IAM grants"
+                    )
+            except PromptParseError as e:
+                if bt:
+                    bt.logging.warning(f"Prompt parsing failed: {e}")
+                # Continue with not_implemented status if parsing fails
+            except Exception as e:
+                if bt:
+                    bt.logging.error(f"Unexpected error during prompt parsing: {e}")
+                # Continue with not_implemented status on unexpected errors
+
+        # TODO: Phase 2-5 (Terraform generation, apply, ZIP packaging)
+        # For now, return not_implemented but include parsed requirements in evidence
+        status = "not_implemented"
+        notes = (
+            "Phase 1 (prompt parsing) complete. "
+            "Phases 2-5 (Terraform generation, apply, ZIP packaging) not yet implemented. "
+            "This miner currently returns an example ZIP (see ALPHACORE_MINER_RETURN_EXAMPLE_ZIP)."
+        )
+
+        evidence_attachments = {"kind": "phase1_only", "phase": 1}
+        if parsed_requirements:
+            evidence_attachments["parsed_resources_count"] = len(parsed_requirements.get("resources", []))
+            evidence_attachments["parsed_iam_grants_count"] = len(parsed_requirements.get("iam_grants", []))
+            # Store parsed requirements in evidence (for debugging/verification)
+            evidence_attachments["parsed_requirements"] = parsed_requirements
+
         return (
             ACResult(
                 task_id=task_id,
-                status="not_implemented",
-                notes=(
-                    "Starter miner: implement _handle_task() to generate a real submission ZIP. "
-                    "This miner currently returns an example ZIP (see ALPHACORE_MINER_RETURN_EXAMPLE_ZIP)."
-                ),
+                status=status,
+                notes=notes,
             ),
-            ACEvidence(task_id=task_id, attachments={"kind": "starter", "note": "example zip only"}),
+            ACEvidence(task_id=task_id, attachments=evidence_attachments),
         )
 
     # ------------------------------------------------------------------ #
