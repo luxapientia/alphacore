@@ -203,10 +203,22 @@ class TerraformGenerator:
                 normalized_iam_grants.append(normalized)
 
             # Generate IAM members from iam_grants array (usually last)
+            # Use a set to track generated HCL to prevent exact duplicates
+            generated_iam_hcl: Set[str] = set()
             for iam_grant in normalized_iam_grants:
                 try:
                     iam_hcl = self._generate_iam_member_hcl(iam_grant)
                     if iam_hcl:
+                        # Check if we've already generated this exact HCL block
+                        if iam_hcl in generated_iam_hcl:
+                            if bt:
+                                member = iam_grant.get("member", "")
+                                role = iam_grant.get("role", "")
+                                bt.logging.warning(
+                                    f"Skipping duplicate IAM grant HCL: member={member}, role={role}"
+                                )
+                            continue
+                        generated_iam_hcl.add(iam_hcl)
                         main_tf_parts.append(iam_hcl)
                 except Exception as exc:
                     if bt:

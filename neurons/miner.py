@@ -608,6 +608,12 @@ class Miner(BaseMinerNeuron):
                 "attempt": attempt + 1,
                 "parsed_requirements": parsed_requirements,
             }
+            # Log the actual error for debugging
+            if bt:
+                bt.logging.warning(
+                    f"Task {task_id} attempt {attempt + 1} failed. "
+                    f"Error: {apply_result.error[:500]}"
+                )
             return (
                 ACResult(
                     task_id=task_id,
@@ -854,19 +860,34 @@ Please generate a corrected prompt that addresses these errors and will produce 
             stderr_text = stderr.decode("utf-8", errors="replace")
 
             if proc.returncode != 0:
-                # Extract error from stderr (last 500 chars for relevance)
-                error_snippet = stderr_text[-500:] if stderr_text else stdout_text[-500:]
+                # Extract error from stderr (last 1000 chars for more context)
+                error_snippet = stderr_text[-1000:] if stderr_text else stdout_text[-1000:]
+
+                # Log the full error for debugging (use INFO level so it shows up in logs)
+                if bt:
+                    # Log the actual error snippet that will be used
+                    bt.logging.info(f"Terraform apply failed. Error snippet (last 1000 chars):\n{error_snippet}")
+                    # Also log full stderr if it's different
+                    if len(stderr_text) > 1000:
+                        bt.logging.debug(f"Full stderr ({len(stderr_text)} chars):\n{stderr_text}")
 
                 # Enhance error message for common GCP authentication issues
+                # Only match specific error patterns, not just the word "cloudresourcemanager"
                 enhanced_error = error_snippet
-                if "accessNotConfigured" in error_snippet or "Cloud Resource Manager API" in error_snippet:
+                if ("accessNotConfigured" in error_snippet and "cloudresourcemanager" in error_snippet.lower()) or \
+                   ("Cloud Resource Manager API" in error_snippet and ("not enabled" in error_snippet.lower() or "disabled" in error_snippet.lower())) or \
+                   ("Error 403" in error_snippet and "cloudresourcemanager" in error_snippet.lower() and "accessNotConfigured" in error_snippet):
                     enhanced_error = (
-                        "GCP Authentication/API Error: Cloud Resource Manager API is not enabled or "
-                        "service account lacks permissions.\n"
-                        "Fix: 1) Enable API: gcloud services enable cloudresourcemanager.googleapis.com\n"
-                        "     2) Grant permissions: gcloud projects add-iam-policy-binding <PROJECT_ID> "
-                        "--member='serviceAccount:<SERVICE_ACCOUNT>' --role='roles/resourcemanager.projectViewer'\n"
-                        f"Original error: {error_snippet}"
+                        "GCP API Error: Cloud Resource Manager API is not enabled.\n"
+                        "This API is REQUIRED for IAM operations (granting viewer access).\n"
+                        "To fix in GCP Console:\n"
+                        "  1. Go to: https://console.cloud.google.com/apis/library/cloudresourcemanager.googleapis.com\n"
+                        "  2. Select your project\n"
+                        "  3. Click 'Enable'\n"
+                        "Or via gcloud CLI:\n"
+                        "  gcloud services enable cloudresourcemanager.googleapis.com --project=<YOUR_PROJECT_ID>\n"
+                        "Note: This API must be enabled in the GCP project where you're deploying resources.\n"
+                        f"\nOriginal error: {error_snippet}"
                     )
 
                 return TerraformResult(
