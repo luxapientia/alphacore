@@ -134,6 +134,9 @@ class TerraformGenerator:
                 validated = self._validate_resource(resource)
                 validated_resources.append(validated)
 
+            # Auto-create VPC/subnetwork for compute instances that need them
+            validated_resources = self._ensure_network_for_instances(validated_resources)
+
             # Resolve dependencies and determine generation order
             ordered_resources = self._resolve_dependencies(validated_resources)
 
@@ -154,8 +157,17 @@ class TerraformGenerator:
                         bt.logging.warning(f"Failed to generate resource {resource.get('type')}: {exc}")
                     # Continue with other resources
 
-            # Generate IAM members (usually last)
+            # Normalize IAM grants (convert service_account to member for consistency)
+            normalized_iam_grants = []
             for iam_grant in iam_grants:
+                normalized = iam_grant.copy()
+                # Convert service_account to member if present
+                if "service_account" in normalized and "member" not in normalized:
+                    normalized["member"] = normalized.pop("service_account")
+                normalized_iam_grants.append(normalized)
+
+            # Generate IAM members (usually last)
+            for iam_grant in normalized_iam_grants:
                 try:
                     iam_hcl = self._generate_iam_member_hcl(iam_grant)
                     if iam_hcl:
@@ -332,6 +344,77 @@ class TerraformGenerator:
         if member.startswith("serviceAccount:"):
             return member
         return f"serviceAccount:{member}"
+
+    # ------------------------------------------------------------------ #
+    # Auto-Resource Creation
+    # ------------------------------------------------------------------ #
+
+    def _ensure_network_for_instances(self, resources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Automatically create VPC and subnetwork for compute instances that need them.
+
+        If a compute instance doesn't have a subnetwork, create:
+        1. A default VPC (if none exists)
+        2. A default subnetwork in the instance's region
+        """
+        # Check if any compute instances need a subnetwork
+        instances_needing_subnet = []
+        existing_networks = set()
+        existing_subnets = set()
+
+        for resource in resources:
+            resource_type = resource.get("type")
+            if resource_type == "google_compute_network":
+                existing_networks.add(resource.get("name", ""))
+            elif resource_type == "google_compute_subnetwork":
+                existing_subnets.add(resource.get("name", ""))
+            elif resource_type == "google_compute_instance":
+                subnetwork = resource.get("subnetwork", "")
+                if not subnetwork:
+                    instances_needing_subnet.append(resource)
+
+        if not instances_needing_subnet:
+            return resources
+
+        # Create default network if needed
+        default_network_name = "net-default"
+        if default_network_name not in existing_networks:
+            resources.insert(0, {
+                "type": "google_compute_network",
+                "name": default_network_name,
+                "auto_create_subnetworks": False
+            })
+            existing_networks.add(default_network_name)
+
+        # Create subnetworks for instances that need them
+        # Group by region to avoid duplicate subnetworks
+        region_to_subnet = {}
+        for instance in instances_needing_subnet:
+            zone = instance.get("zone", "")
+            # Extract region from zone (e.g., "europe-west1-c" -> "europe-west1")
+            region = zone.rsplit("-", 1)[0] if zone else "us-central1"
+
+            if region not in region_to_subnet:
+                subnet_name = f"subnet-default-{region.replace('-', '')}"
+                region_to_subnet[region] = {
+                    "type": "google_compute_subnetwork",
+                    "name": subnet_name,
+                    "network": default_network_name,
+                    "region": region,
+                    "ip_cidr_range": self._generate_default_cidr(region)
+                }
+                resources.append(region_to_subnet[region])
+
+            # Update instance to use the subnetwork
+            instance["subnetwork"] = region_to_subnet[region]["name"]
+
+        return resources
+
+    def _generate_default_cidr(self, region: str) -> str:
+        """Generate a default CIDR for a region (simple hash-based approach)."""
+        # Use a simple hash of region name to get consistent CIDR
+        hash_val = abs(hash(region)) % 256
+        return f"10.{hash_val}.0.0/24"
 
     # ------------------------------------------------------------------ #
     # Dependency Resolution
@@ -583,11 +666,17 @@ class TerraformGenerator:
 
     def _generate_iam_member_hcl(self, iam_grant: Dict[str, Any]) -> str:
         """Generate google_project_iam_member resource from IAM grant."""
+        # IAM grants should already be normalized to use "member" field
         member = iam_grant.get("member", "")
+        if not member:
+            raise TerraformGenerationError("IAM grant missing 'member' field")
+
+        # Normalize member format (ensure serviceAccount: prefix)
+        member = self._normalize_iam_member(member)
         role = iam_grant.get("role", "roles/viewer")
 
         # Use data source for project ID
-        return f'''resource "google_project_iam_member" "viewer_access_{self._terraform_id(member.replace('@', '_').replace('.', '_'))}" {{
+        return f'''resource "google_project_iam_member" "viewer_access_{self._terraform_id(member.replace('@', '_').replace('.', '_').replace(':', '_'))}" {{
   project = data.google_project.current.project_id
   role    = "{role}"
   member  = "{member}"
