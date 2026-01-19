@@ -100,12 +100,13 @@ class TerraformGenerator:
     # Public API
     # ------------------------------------------------------------------ #
 
-    def generate_workspace(self, parsed_data: Dict[str, Any]) -> TerraformWorkspace:
+    def generate_workspace(self, parsed_data: Dict[str, Any], original_prompt: Optional[str] = None) -> TerraformWorkspace:
         """
         Generate complete Terraform workspace from parsed prompt data.
 
         Args:
             parsed_data: Parsed requirements from Phase 1 (prompt parser)
+            original_prompt: Original natural language prompt (for context/reference)
 
         Returns:
             TerraformWorkspace with paths to generated files
@@ -122,6 +123,9 @@ class TerraformGenerator:
 
         if not resources and not iam_grants:
             raise TerraformGenerationError("No resources or IAM grants found in parsed data")
+
+        # Store original prompt for reference (useful for debugging and future LLM-based generation)
+        self._original_prompt = original_prompt
 
         # Create temporary workspace directory
         workspace_dir = Path(tempfile.mkdtemp(prefix="alphacore_tf_"))

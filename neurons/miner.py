@@ -515,9 +515,9 @@ class Miner(BaseMinerNeuron):
                 None,
             )
 
-        # Phase 2: Generate Terraform workspace
+        # Phase 2: Generate Terraform workspace (pass original prompt for context)
         try:
-            workspace = self._terraform_generator.generate_workspace(parsed_requirements)
+            workspace = self._terraform_generator.generate_workspace(parsed_requirements, original_prompt=prompt)
             if bt:
                 bt.logging.info(f"[Attempt {attempt + 1}] Generated Terraform workspace at {workspace.path}")
         except TerraformGenerationError as e:
