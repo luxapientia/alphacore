@@ -238,9 +238,8 @@ class TerraformGenerator:
                     if bt:
                         bt.logging.warning(f"Failed to generate IAM member resource: {exc}")
 
-            # Add data source for project ID (needed for IAM)
-            if iam_grants:
-                main_tf_parts.insert(0, 'data "google_project" "current" {}\n')
+            # Note: No need for data source - we use project from provider/variable directly
+            # This avoids requiring Cloud Resource Manager API
 
             main_tf_content = "\n".join(main_tf_parts)
             main_tf_path = workspace_dir / "main.tf"
@@ -809,9 +808,18 @@ provider "google" {
         member = self._normalize_iam_member(member)
         role = iam_grant.get("role", "roles/viewer")
 
-        # Use data source for project ID
+        # Use project from provider or variable (same as provider configuration)
+        # This avoids requiring Cloud Resource Manager API which is needed for data sources
+        project_id = self._get_gcp_project_id()
+        if project_id:
+            # Use the project ID directly (matches provider configuration)
+            project_ref = f'"{project_id}"'
+        else:
+            # Use the same variable as the provider
+            project_ref = "var.gcp_project"
+
         return f'''resource "google_project_iam_member" "viewer_access_{self._terraform_id(member.replace('@', '_').replace('.', '_').replace(':', '_'))}" {{
-  project = data.google_project.current.project_id
+  project = {project_ref}
   role    = "{role}"
   member  = "{member}"
 }}
