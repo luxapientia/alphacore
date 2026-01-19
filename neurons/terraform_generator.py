@@ -145,6 +145,12 @@ class TerraformGenerator:
             versions_tf_path = workspace_dir / "versions.tf"
             versions_tf_path.write_text(versions_tf_content, encoding="utf-8")
 
+            # Generate provider.tf with project ID (if available)
+            provider_tf_content = self._generate_provider_tf()
+            if provider_tf_content:
+                provider_tf_path = workspace_dir / "provider.tf"
+                provider_tf_path.write_text(provider_tf_content, encoding="utf-8")
+
             # Generate main.tf with all resources
             main_tf_parts = []
             for resource in ordered_resources:
@@ -495,6 +501,68 @@ class TerraformGenerator:
     # HCL Generation
     # ------------------------------------------------------------------ #
 
+    def _get_gcp_project_id(self) -> Optional[str]:
+        """Get GCP project ID from credentials file or environment."""
+        import json
+
+        # Try to get from GOOGLE_APPLICATION_CREDENTIALS
+        creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if creds_path and Path(creds_path).exists():
+            try:
+                with open(creds_path, "r") as f:
+                    creds = json.load(f)
+                    project_id = creds.get("project_id")
+                    if project_id:
+                        return project_id
+            except Exception:
+                pass
+
+        # Try ALPHACORE_GCP_CREDS_FILE
+        creds_path = os.getenv("ALPHACORE_GCP_CREDS_FILE")
+        if creds_path and Path(creds_path).exists():
+            try:
+                with open(creds_path, "r") as f:
+                    creds = json.load(f)
+                    project_id = creds.get("project_id")
+                    if project_id:
+                        return project_id
+            except Exception:
+                pass
+
+        # Try GCP_PROJECT environment variable
+        return os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+
+    def _get_gcp_project_id(self) -> Optional[str]:
+        """Get GCP project ID from credentials file or environment."""
+        import json
+
+        # Try to get from GOOGLE_APPLICATION_CREDENTIALS
+        creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if creds_path and Path(creds_path).exists():
+            try:
+                with open(creds_path, "r") as f:
+                    creds = json.load(f)
+                    project_id = creds.get("project_id")
+                    if project_id:
+                        return project_id
+            except Exception:
+                pass
+
+        # Try ALPHACORE_GCP_CREDS_FILE
+        creds_path = os.getenv("ALPHACORE_GCP_CREDS_FILE")
+        if creds_path and Path(creds_path).exists():
+            try:
+                with open(creds_path, "r") as f:
+                    creds = json.load(f)
+                    project_id = creds.get("project_id")
+                    if project_id:
+                        return project_id
+            except Exception:
+                pass
+
+        # Try GCP_PROJECT environment variable
+        return os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+
     def _generate_versions_tf(self) -> str:
         """Generate versions.tf with provider constraints."""
         return '''terraform {
@@ -510,6 +578,30 @@ class TerraformGenerator:
     }
   }
 }
+'''
+
+    def _generate_provider_tf(self) -> Optional[str]:
+        """Generate provider.tf with project configuration."""
+        project_id = self._get_gcp_project_id()
+        if not project_id:
+            if bt:
+                bt.logging.warning("GCP project ID not found. Terraform may require project to be set manually.")
+            return None
+
+        return f'''provider "google" {{
+  project = "{project_id}"
+}}
+'''
+
+    def _generate_provider_tf(self) -> Optional[str]:
+        """Generate provider.tf with project configuration."""
+        project_id = self._get_gcp_project_id()
+        if not project_id:
+            return None
+
+        return f'''provider "google" {{
+  project = "{project_id}"
+}}
 '''
 
     def _generate_resource_hcl(self, resource: Dict[str, Any]) -> str:
