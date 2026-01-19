@@ -758,6 +758,18 @@ Please generate a corrected prompt that addresses these errors and will produce 
     async def _run_terraform_init(self, workspace_path: Path, timeout: int = 300) -> TerraformResult:
         """Run terraform init and capture output/errors."""
         try:
+            # Prepare environment variables
+            env = os.environ.copy()
+
+            # If TF_VAR_gcp_project is not set, try to get project_id from credentials
+            # and set it (Terraform will use TF_VAR_* environment variables as variable values)
+            if "TF_VAR_gcp_project" not in env:
+                project_id = self._get_gcp_project_id_from_env_or_creds()
+                if project_id:
+                    env["TF_VAR_gcp_project"] = project_id
+                    if bt:
+                        bt.logging.debug(f"Set TF_VAR_gcp_project={project_id} from credentials/environment")
+
             proc = await asyncio.create_subprocess_exec(
                 "terraform",
                 "init",
@@ -767,7 +779,7 @@ Please generate a corrected prompt that addresses these errors and will produce 
                 cwd=str(workspace_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=os.environ.copy(),
+                env=env,
             )
 
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -813,6 +825,18 @@ Please generate a corrected prompt that addresses these errors and will produce 
     async def _run_terraform_apply(self, workspace_path: Path, timeout: int = 600) -> TerraformResult:
         """Run terraform apply and capture output/errors."""
         try:
+            # Prepare environment variables
+            env = os.environ.copy()
+
+            # If TF_VAR_gcp_project is not set, try to get project_id from credentials
+            # and set it (Terraform will use TF_VAR_* environment variables as variable values)
+            if "TF_VAR_gcp_project" not in env:
+                project_id = self._get_gcp_project_id_from_env_or_creds()
+                if project_id:
+                    env["TF_VAR_gcp_project"] = project_id
+                    if bt:
+                        bt.logging.debug(f"Set TF_VAR_gcp_project={project_id} from credentials/environment")
+
             proc = await asyncio.create_subprocess_exec(
                 "terraform",
                 "apply",
@@ -821,7 +845,7 @@ Please generate a corrected prompt that addresses these errors and will produce 
                 cwd=str(workspace_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=os.environ.copy(),
+                env=env,
             )
 
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -880,6 +904,40 @@ Please generate a corrected prompt that addresses these errors and will produce 
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _get_gcp_project_id_from_env_or_creds() -> Optional[str]:
+        """Get GCP project ID from credentials file or environment variables."""
+        # Try environment variables first
+        project_id = os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        if project_id:
+            return project_id
+
+        # Try to get from GOOGLE_APPLICATION_CREDENTIALS
+        creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if creds_path and Path(creds_path).exists():
+            try:
+                with open(creds_path, "r") as f:
+                    creds = json.load(f)
+                    project_id = creds.get("project_id")
+                    if project_id:
+                        return project_id
+            except Exception:
+                pass
+
+        # Try ALPHACORE_GCP_CREDS_FILE
+        creds_path = os.getenv("ALPHACORE_GCP_CREDS_FILE")
+        if creds_path and Path(creds_path).exists():
+            try:
+                with open(creds_path, "r") as f:
+                    creds = json.load(f)
+                    project_id = creds.get("project_id")
+                    if project_id:
+                        return project_id
+            except Exception:
+                pass
+
+        return None
 
     @staticmethod
     def _extract_prompt(synapse: TaskSynapse) -> str:
