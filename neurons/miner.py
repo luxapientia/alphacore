@@ -379,11 +379,18 @@ class Miner(BaseMinerNeuron):
 
                 # If not successful, capture error for next iteration
                 error_message = result.notes or "Unknown error"
+                # Extract parsed structure from evidence if available
+                parsed_structure = None
+                if evidence and evidence.attachments:
+                    parsed_structure = evidence.attachments.get("parsed_requirements")
+
                 error_history.append(
                     {
                         "attempt": attempt,
                         "error": error_message,
                         "status": result.status,
+                        "parsed_resources": parsed_structure.get("resources") if parsed_structure else None,
+                        "parsed_iam_grants": parsed_structure.get("iam_grants") if parsed_structure else None,
                     }
                 )
 
@@ -406,11 +413,21 @@ class Miner(BaseMinerNeuron):
 
             except Exception as exc:
                 error_message = str(exc)
+                # Try to extract parsed structure from evidence if available
+                parsed_structure = None
+                try:
+                    if evidence and evidence.attachments:
+                        parsed_structure = evidence.attachments.get("parsed_requirements")
+                except Exception:
+                    pass  # Ignore if evidence not available
+
                 error_history.append(
                     {
                         "attempt": attempt,
                         "error": error_message,
                         "status": "exception",
+                        "parsed_resources": parsed_structure.get("resources") if parsed_structure else None,
+                        "parsed_iam_grants": parsed_structure.get("iam_grants") if parsed_structure else None,
                     }
                 )
 
@@ -503,6 +520,7 @@ class Miner(BaseMinerNeuron):
             if parsed_requirements:
                 evidence_attachments["parsed_resources_count"] = len(parsed_requirements.get("resources", []))
                 evidence_attachments["parsed_iam_grants_count"] = len(parsed_requirements.get("iam_grants", []))
+                evidence_attachments["parsed_requirements"] = parsed_requirements  # Store full parsed structure
             return (
                 ACResult(task_id=task_id, status=status, notes=notes),
                 ACEvidence(task_id=task_id, attachments=evidence_attachments),
@@ -525,22 +543,34 @@ class Miner(BaseMinerNeuron):
             if bt:
                 bt.logging.info(f"[Attempt {attempt + 1}] Generated Terraform workspace at {workspace.path}")
         except TerraformGenerationError as e:
+            # Store parsed requirements in evidence for error history
+            evidence_attachments = {
+                "kind": "terraform_generation_error",
+                "attempt": attempt + 1,
+                "parsed_requirements": parsed_requirements,
+            }
             return (
                 ACResult(
                     task_id=task_id,
                     status="error",
                     notes=f"Terraform generation failed: {e}",
                 ),
-                None,
+                ACEvidence(task_id=task_id, attachments=evidence_attachments),
             )
         except Exception as e:
+            # Store parsed requirements in evidence for error history
+            evidence_attachments = {
+                "kind": "terraform_generation_exception",
+                "attempt": attempt + 1,
+                "parsed_requirements": parsed_requirements,
+            }
             return (
                 ACResult(
                     task_id=task_id,
                     status="error",
                     notes=f"Terraform generation exception: {e}",
                 ),
-                None,
+                ACEvidence(task_id=task_id, attachments=evidence_attachments),
             )
 
         # Phase 3: Run terraform init
@@ -550,13 +580,19 @@ class Miner(BaseMinerNeuron):
             import shutil
             if workspace.path.exists():
                 shutil.rmtree(workspace.path, ignore_errors=True)
+            # Store parsed requirements in evidence for error history
+            evidence_attachments = {
+                "kind": "terraform_init_error",
+                "attempt": attempt + 1,
+                "parsed_requirements": parsed_requirements,
+            }
             return (
                 ACResult(
                     task_id=task_id,
                     status="error",
                     notes=f"terraform init failed: {init_result.error}",
                 ),
-                None,
+                ACEvidence(task_id=task_id, attachments=evidence_attachments),
             )
 
         # Phase 4: Run terraform apply
@@ -566,13 +602,19 @@ class Miner(BaseMinerNeuron):
             import shutil
             if workspace.path.exists():
                 shutil.rmtree(workspace.path, ignore_errors=True)
+            # Store parsed requirements in evidence for error history
+            evidence_attachments = {
+                "kind": "terraform_apply_error",
+                "attempt": attempt + 1,
+                "parsed_requirements": parsed_requirements,
+            }
             return (
                 ACResult(
                     task_id=task_id,
                     status="error",
                     notes=f"terraform apply failed: {apply_result.error}",
                 ),
-                None,
+                ACEvidence(task_id=task_id, attachments=evidence_attachments),
             )
 
         # Phase 5: Verify tfstate exists
@@ -582,13 +624,19 @@ class Miner(BaseMinerNeuron):
             import shutil
             if workspace.path.exists():
                 shutil.rmtree(workspace.path, ignore_errors=True)
+            # Store parsed requirements in evidence for error history
+            evidence_attachments = {
+                "kind": "terraform_tfstate_missing",
+                "attempt": attempt + 1,
+                "parsed_requirements": parsed_requirements,
+            }
             return (
                 ACResult(
                     task_id=task_id,
                     status="error",
                     notes="terraform.tfstate not found after apply",
                 ),
-                None,
+                ACEvidence(task_id=task_id, attachments=evidence_attachments),
             )
 
         # Success! Package workspace info for evidence
@@ -597,6 +645,7 @@ class Miner(BaseMinerNeuron):
             "phase": 2,
             "attempt": attempt + 1,
             "workspace_path": str(workspace.path),
+            "parsed_requirements": parsed_requirements,  # Store for reference
         }
 
         return (
@@ -631,13 +680,41 @@ class Miner(BaseMinerNeuron):
             [f"Attempt {err['attempt'] + 1}: {err['error'][:500]}" for err in recent_errors]
         )
 
-        system_message = """You are a Terraform configuration fixer. Given an original prompt and error messages from failed attempts, generate an improved prompt that will produce correct Terraform code.
+        # Build parsed structure summary from most recent error (if available)
+        parsed_structure_summary = ""
+        if recent_errors:
+            latest_error_entry = recent_errors[-1]
+            parsed_resources = latest_error_entry.get("parsed_resources")
+            parsed_iam_grants = latest_error_entry.get("parsed_iam_grants")
+
+            if parsed_resources or parsed_iam_grants:
+                parsed_structure_summary = "\n\nPARSED STRUCTURE FROM LAST ATTEMPT:\n"
+                if parsed_resources:
+                    parsed_structure_summary += f"Resources ({len(parsed_resources)}):\n"
+                    for idx, res in enumerate(parsed_resources[:5]):  # Limit to first 5
+                        res_type = res.get("type", "unknown")
+                        res_name = res.get("name") or res.get("repository_id", "N/A")
+                        parsed_structure_summary += f"  {idx + 1}. {res_type}: {res_name}\n"
+                    if len(parsed_resources) > 5:
+                        parsed_structure_summary += f"  ... and {len(parsed_resources) - 5} more resources\n"
+
+                if parsed_iam_grants:
+                    parsed_structure_summary += f"IAM Grants ({len(parsed_iam_grants)}):\n"
+                    for idx, grant in enumerate(parsed_iam_grants[:5]):  # Limit to first 5
+                        member = grant.get("member") or grant.get("service_account", "N/A")
+                        role = grant.get("role", "N/A")
+                        parsed_structure_summary += f"  {idx + 1}. {member} -> {role}\n"
+                    if len(parsed_iam_grants) > 5:
+                        parsed_structure_summary += f"  ... and {len(parsed_iam_grants) - 5} more grants\n"
+
+        system_message = """You are a Terraform configuration fixer. Given an original prompt, error messages from failed attempts, and the parsed structure that was generated, generate an improved prompt that will produce correct Terraform code.
 
 Your task:
 1. Analyze the original prompt and error messages
-2. Identify what went wrong (validation errors, dependency issues, syntax errors, etc.)
-3. Generate a corrected version of the prompt that will fix these issues
-4. Ensure the corrected prompt is clear, specific, and will generate valid Terraform
+2. Review the parsed structure to understand what was extracted (this helps identify if parsing was correct but generation failed, or if parsing itself was wrong)
+3. Identify what went wrong (validation errors, dependency issues, syntax errors, duplicate resources, etc.)
+4. Generate a corrected version of the prompt that will fix these issues
+5. Ensure the corrected prompt is clear, specific, and will generate valid Terraform
 
 Return ONLY the corrected prompt text, nothing else."""
 
@@ -646,11 +723,11 @@ Return ONLY the corrected prompt text, nothing else."""
 
 ERROR HISTORY:
 {error_summary}
-
+{parsed_structure_summary}
 LATEST ERROR:
 {latest_error}
 
-Please generate a corrected prompt that addresses these errors and will produce valid Terraform configuration."""
+Please generate a corrected prompt that addresses these errors and will produce valid Terraform configuration. Use the parsed structure information to understand what was extracted and what might need to be fixed."""
 
         try:
             # Get model from prompt parser config

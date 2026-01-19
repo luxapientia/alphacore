@@ -157,26 +157,53 @@ class TerraformGenerator:
 
             # Generate main.tf with all resources
             main_tf_parts = []
+            seen_iam_combinations: Set[Tuple[str, str]] = set()  # Track (member, role) to prevent duplicates
+
+            # First, process non-IAM resources and collect IAM members from resources array
+            iam_resources_from_resources: List[Dict[str, Any]] = []
             for resource in ordered_resources:
-                try:
-                    resource_hcl = self._generate_resource_hcl(resource)
-                    if resource_hcl:
-                        main_tf_parts.append(resource_hcl)
-                except Exception as exc:
-                    if bt:
-                        bt.logging.warning(f"Failed to generate resource {resource.get('type')}: {exc}")
-                    # Continue with other resources
+                resource_type = resource.get("type")
+                # Separate IAM member resources for processing after IAM grants
+                if resource_type == "google_project_iam_member":
+                    iam_resources_from_resources.append(resource)
+                else:
+                    try:
+                        resource_hcl = self._generate_resource_hcl(resource)
+                        if resource_hcl:
+                            main_tf_parts.append(resource_hcl)
+                    except Exception as exc:
+                        if bt:
+                            bt.logging.warning(f"Failed to generate resource {resource_type}: {exc}")
+                        # Continue with other resources
 
             # Normalize IAM grants (convert service_account to member for consistency)
             normalized_iam_grants = []
+
             for iam_grant in iam_grants:
                 normalized = iam_grant.copy()
                 # Convert service_account to member if present
                 if "service_account" in normalized and "member" not in normalized:
                     normalized["member"] = normalized.pop("service_account")
+
+                # Normalize member format
+                member = self._normalize_iam_member(normalized.get("member", ""))
+                role = normalized.get("role", "roles/viewer")
+
+                # Deduplicate: skip if we've already seen this (member, role) combination
+                iam_key = (member, role)
+                if iam_key in seen_iam_combinations:
+                    if bt:
+                        bt.logging.warning(
+                            f"Skipping duplicate IAM grant: member={member}, role={role}"
+                        )
+                    continue
+
+                seen_iam_combinations.add(iam_key)
+                normalized["member"] = member
+                normalized["role"] = role
                 normalized_iam_grants.append(normalized)
 
-            # Generate IAM members (usually last)
+            # Generate IAM members from iam_grants array (usually last)
             for iam_grant in normalized_iam_grants:
                 try:
                     iam_hcl = self._generate_iam_member_hcl(iam_grant)
@@ -185,6 +212,32 @@ class TerraformGenerator:
                 except Exception as exc:
                     if bt:
                         bt.logging.warning(f"Failed to generate IAM grant: {exc}")
+
+            # Process IAM member resources from resources array (deduplicate against iam_grants)
+            for iam_resource in iam_resources_from_resources:
+                try:
+                    # Extract member and role for deduplication check
+                    member = self._normalize_iam_member(iam_resource.get("member", ""))
+                    role = iam_resource.get("role", "roles/viewer")
+                    iam_key = (member, role)
+
+                    # Skip if already processed from iam_grants
+                    if iam_key in seen_iam_combinations:
+                        if bt:
+                            bt.logging.warning(
+                                f"Skipping duplicate IAM member resource: member={member}, role={role} "
+                                "(already processed from iam_grants)"
+                            )
+                        continue
+
+                    # Mark as seen and generate
+                    seen_iam_combinations.add(iam_key)
+                    resource_hcl = self._generate_resource_hcl(iam_resource)
+                    if resource_hcl:
+                        main_tf_parts.append(resource_hcl)
+                except Exception as exc:
+                    if bt:
+                        bt.logging.warning(f"Failed to generate IAM member resource: {exc}")
 
             # Add data source for project ID (needed for IAM)
             if iam_grants:
