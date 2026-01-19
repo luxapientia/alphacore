@@ -711,12 +711,35 @@ provider "google" {
             ports_list = ", ".join([f'"{p}"' for p in ports])
             ports_str = f"\n    ports    = [{ports_list}]"
 
+        # Terraform requires at least one of source_ranges, source_tags, or source_service_accounts
+        # for ingress firewall rules. If none are provided, default to source_ranges = ["0.0.0.0/0"]
+        source_ranges = resource.get("source_ranges", [])
+        source_tags = resource.get("source_tags", [])
+        source_service_accounts = resource.get("source_service_accounts", [])
+
+        source_block = ""
+        if source_ranges or source_tags or source_service_accounts:
+            # Use provided sources
+            if source_ranges:
+                ranges_list = ", ".join([f'"{r}"' for r in source_ranges])
+                source_block += f'\n  source_ranges = [{ranges_list}]'
+            if source_tags:
+                tags_list = ", ".join([f'"{t}"' for t in source_tags])
+                source_block += f'\n  source_tags = [{tags_list}]'
+            if source_service_accounts:
+                accounts_list = ", ".join([f'"{a}"' for a in source_service_accounts])
+                source_block += f'\n  source_service_accounts = [{accounts_list}]'
+        else:
+            # Default: allow from anywhere for ingress, or no source for egress
+            if direction.upper() == "INGRESS":
+                source_block = '\n  source_ranges = ["0.0.0.0/0"]'
+
         return f'''resource "google_compute_firewall" "{tf_id}" {{
   name      = "{name}"
   network   = {network_ref}
   direction = "{direction}"
   priority  = {priority}
-  disabled  = {str(disabled).lower()}
+  disabled  = {str(disabled).lower()}{source_block}
 
   allow {{
     protocol = "{protocol}"{ports_str}
