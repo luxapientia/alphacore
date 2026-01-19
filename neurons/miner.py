@@ -217,14 +217,14 @@ class Miner(BaseMinerNeuron):
             retry_enabled = self._env_flag("ALPHACORE_RETRY_ENABLED", default=True)
 
             if retry_enabled and max_retries > 0:
-            result, evidence = await self._handle_task_with_retry(
+                result, evidence = await self._handle_task_with_retry(
                     task_id=synapse.task_id,
                     prompt=prompt,
                     max_retries=max_retries,
                 )
             else:
                 # Fallback to single attempt if retry disabled
-            result, evidence = await self._handle_task(task_id=synapse.task_id, prompt=prompt)
+                result, evidence = await self._handle_task(task_id=synapse.task_id, prompt=prompt)
 
             synapse.attach_result(result, evidence=evidence)
 
