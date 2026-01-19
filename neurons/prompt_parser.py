@@ -127,22 +127,54 @@ class PromptParser:
                 except json.JSONDecodeError as e:
                     if attempt < self.max_retries - 1:
                         if bt:
-                            bt.logging.warning(f"Failed to parse JSON response (attempt {attempt + 1}/{self.max_retries}): {e}")
+                            bt.logging.warning(
+                                f"Failed to parse JSON response (attempt {attempt + 1}/{self.max_retries}): {e}. "
+                                f"Response preview: {content[:200]}..."
+                            )
                         time.sleep(1)
                         continue
-                    raise PromptParseError(f"Invalid JSON response: {e}") from e
+                    # Include response snippet in error for debugging
+                    error_msg = f"Invalid JSON response: {e}"
+                    if content:
+                        error_msg += f"\nResponse preview: {content[:500]}"
+                    raise PromptParseError(error_msg) from e
 
                 # Validate and normalize parsed structure
-                normalized = self._normalize_parsed(parsed)
-                return normalized
+                try:
+                    normalized = self._normalize_parsed(parsed)
+                    if bt:
+                        bt.logging.info(
+                            f"Successfully parsed prompt: {len(normalized.get('resources', []))} resources, "
+                            f"{len(normalized.get('iam_grants', []))} IAM grants"
+                        )
+                        bt.logging.debug(
+                            f"Parsed prompt content: {json.dumps(normalized, indent=2)}"
+                        )
+                    return normalized
+                except PromptParseError as e:
+                    # Re-raise validation errors immediately (don't retry)
+                    raise
+                except Exception as e:
+                    # Wrap unexpected normalization errors
+                    raise PromptParseError(f"Failed to normalize parsed structure: {e}") from e
 
+            except PromptParseError:
+                # Don't retry validation errors - they indicate structural issues
+                raise
             except Exception as e:
                 if attempt < self.max_retries - 1:
                     if bt:
-                        bt.logging.warning(f"LLM call failed (attempt {attempt + 1}/{self.max_retries}): {e}")
+                        bt.logging.warning(
+                            f"LLM call failed (attempt {attempt + 1}/{self.max_retries}): {e}. "
+                            f"Retrying in 1 second..."
+                        )
                     time.sleep(1)
                     continue
-                raise PromptParseError(f"Failed to parse prompt after {self.max_retries} attempts: {e}") from e
+                # Last attempt failed - include more context
+                error_msg = f"Failed to parse prompt after {self.max_retries} attempts: {e}"
+                if bt:
+                    bt.logging.error(error_msg)
+                raise PromptParseError(error_msg) from e
 
         raise PromptParseError(f"Failed to parse prompt after {self.max_retries} attempts")
 
@@ -189,7 +221,7 @@ Output a JSON object with this exact structure:
     },
     {
       "type": "google_artifact_registry_repository",
-      "name": "repo-123",
+      "repository_id": "repo-123",  // CRITICAL: Use ONLY "repository_id", NEVER use "name" for this resource type
       "location": "asia-southeast1",
       "format": "DOCKER"
     }
@@ -203,33 +235,29 @@ Output a JSON object with this exact structure:
   ]
 }
 
-Supported resource types:
-- google_compute_network (VPC)
-- google_compute_subnetwork
-- google_compute_firewall
-- google_compute_instance
-- google_pubsub_topic
-- google_pubsub_subscription
-- google_artifact_registry_repository
-- google_storage_bucket
-- google_secret_manager_secret
-- google_cloud_scheduler_job
-- google_dns_managed_zone
-- google_dns_record_set
-- google_logging_project_sink
-- google_project_iam_member
-- google_service_account
-- google_service_account_iam_member
+Supported resource types (ONLY these are supported):
+- google_compute_network (VPC) - requires: name, auto_create_subnetworks
+- google_compute_subnetwork - requires: name, network, region, ip_cidr_range
+- google_compute_firewall - requires: name, network, direction, allowed, priority
+- google_compute_instance - requires: name, zone, machine_type, subnetwork
+- google_pubsub_topic - requires: name
+- google_artifact_registry_repository - requires: repository_id (NOT "name"), location, format
+- google_project_iam_member - requires: member, role
+
+CRITICAL: For google_artifact_registry_repository, you MUST use "repository_id" field and MUST NOT include "name" field.
 
 Key extraction rules:
-1. Extract exact resource names as specified in prompt
-2. Extract regions/zones exactly as written
-3. Extract CIDR blocks exactly (e.g., "10.86.156.0/24")
-4. Extract metadata_startup_script exactly, preserving newlines as \\n
-5. For IAM grants, look for "Grant X viewer access" or similar patterns
-6. Extract all boolean values (auto_create_subnetworks, disabled, etc.)
-7. Preserve exact priority values for firewalls
-8. Extract message_retention_duration as duration strings (e.g., "900s", "600s")
+1. Extract exact resource names as specified in prompt (must be 1-63 chars, lowercase alphanumeric + hyphens)
+2. For google_artifact_registry_repository: use ONLY "repository_id" field, NEVER include "name" field
+3. Extract regions/zones exactly as written (common regions: us-east1, us-central1, europe-west1, asia-southeast1, etc.)
+4. Extract CIDR blocks exactly (e.g., "10.86.156.0/24") - must be valid IPv4 CIDR
+5. Extract metadata_startup_script exactly, preserving newlines as \\n
+6. For IAM grants, look for "Grant X viewer access" or similar patterns - roles must start with "roles/"
+7. Extract all boolean values (auto_create_subnetworks, disabled, etc.)
+8. Preserve exact priority values for firewalls (typically 1000)
+9. Extract message_retention_duration as duration strings (e.g., "900s", "600s")
+10. Validate machine_type is a valid GCP type (e.g., e2-micro, e2-small, n1-standard-1)
+11. Zone format must be "region-zone" (e.g., "us-east1-c")
 
 Return ONLY valid JSON, no explanations or markdown.
 """
@@ -260,14 +288,126 @@ Return ONLY valid JSON, no explanations or markdown.
             iam_grants = []
         parsed["iam_grants"] = iam_grants
 
-        # Validate each resource has required fields
+        # Supported resource types (must match terraform_generator.py)
+        SUPPORTED_RESOURCE_TYPES = {
+            "google_compute_network",
+            "google_compute_subnetwork",
+            "google_compute_firewall",
+            "google_compute_instance",
+            "google_artifact_registry_repository",
+            "google_pubsub_topic",
+            "google_project_iam_member",
+        }
+
+        # Valid GCP regions (must match terraform_generator.py)
+        VALID_REGIONS = {
+            "us-east1", "us-east4", "us-central1", "us-west1", "us-west2", "us-west3", "us-west4",
+            "europe-west1", "europe-west2", "europe-west3", "europe-west4", "europe-west6",
+            "asia-east1", "asia-southeast1", "asia-south1", "asia-northeast1", "asia-northeast2",
+            "australia-southeast1", "southamerica-east1",
+        }
+
+        # Validate each resource
         for idx, resource in enumerate(resources):
             if not isinstance(resource, dict):
                 raise PromptParseError(f"Resource at index {idx} must be an object")
-            if "type" not in resource:
+
+            # Validate resource type
+            resource_type = resource.get("type")
+            if not resource_type:
                 raise PromptParseError(f"Resource at index {idx} missing 'type' field")
-            if "name" not in resource:
-                raise PromptParseError(f"Resource at index {idx} missing 'name' field")
+
+            if resource_type not in SUPPORTED_RESOURCE_TYPES:
+                raise PromptParseError(
+                    f"Resource at index {idx} has unsupported type '{resource_type}'. "
+                    f"Supported types: {', '.join(sorted(SUPPORTED_RESOURCE_TYPES))}"
+                )
+
+            # Resource-specific validation
+            if resource_type == "google_artifact_registry_repository":
+                # Artifact registry uses ONLY "repository_id" - NOT "name"
+                if "repository_id" not in resource:
+                    raise PromptParseError(
+                        f"Resource at index {idx} (type: {resource_type}) missing required 'repository_id' field. "
+                        "Note: Use 'repository_id', NOT 'name' for artifact registry repositories."
+                    )
+                # Reject "name" field if present - enforce consistency
+                if "name" in resource:
+                    raise PromptParseError(
+                        f"Resource at index {idx} (type: {resource_type}) should use 'repository_id' field, "
+                        "not 'name'. Remove 'name' and use 'repository_id' instead."
+                    )
+                # Validate repository_id format (same as GCP name format)
+                repository_id = resource.get("repository_id")
+                if repository_id and isinstance(repository_id, str):
+                    import re
+                    if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", repository_id) or len(repository_id) > 63:
+                        raise PromptParseError(
+                            f"Resource at index {idx} (type: {resource_type}) has invalid repository_id '{repository_id}'. "
+                            "GCP names must be 1-63 characters, lowercase alphanumeric with hyphens only."
+                        )
+            else:
+                # All other resources require "name"
+                if "name" not in resource:
+                    raise PromptParseError(
+                        f"Resource at index {idx} (type: {resource_type}) missing required 'name' field"
+                    )
+                # Validate GCP name format (1-63 chars, lowercase alphanumeric + hyphens)
+                name = resource.get("name")
+                if name and isinstance(name, str):
+                    import re
+                    if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", name) or len(name) > 63:
+                        raise PromptParseError(
+                            f"Resource at index {idx} (type: {resource_type}) has invalid name '{name}'. "
+                            "GCP names must be 1-63 characters, lowercase alphanumeric with hyphens only."
+                        )
+
+            # Validate region if present
+            region = resource.get("region") or resource.get("location")
+            if region and isinstance(region, str):
+                if region not in VALID_REGIONS:
+                    if bt:
+                        bt.logging.warning(
+                            f"Resource at index {idx} (type: {resource_type}) has region '{region}' "
+                            f"not in known valid regions list. This may still work if it's a valid GCP region."
+                        )
+
+            # Validate zone format if present (e.g., "us-east1-c")
+            zone = resource.get("zone")
+            if zone and isinstance(zone, str):
+                import re
+                if not re.match(r"^[a-z]+-[a-z]+[0-9]+-[a-z]$", zone):
+                    if bt:
+                        bt.logging.warning(
+                            f"Resource at index {idx} (type: {resource_type}) has zone '{zone}' "
+                            "with unexpected format. Expected format: 'region-zone' (e.g., 'us-east1-c')"
+                        )
+
+            # Validate machine_type if present
+            machine_type = resource.get("machine_type")
+            if machine_type and isinstance(machine_type, str):
+                VALID_MACHINE_TYPES = {
+                    "e2-micro", "e2-small", "e2-medium", "e2-standard-2", "e2-standard-4",
+                    "n1-standard-1", "n1-standard-2", "f1-micro",
+                }
+                if machine_type not in VALID_MACHINE_TYPES:
+                    if bt:
+                        bt.logging.warning(
+                            f"Resource at index {idx} (type: {resource_type}) has machine_type '{machine_type}' "
+                            "not in known valid types. This may still work if it's a valid GCP machine type."
+                        )
+
+            # Validate CIDR format if present
+            ip_cidr_range = resource.get("ip_cidr_range")
+            if ip_cidr_range and isinstance(ip_cidr_range, str):
+                import ipaddress
+                try:
+                    ipaddress.IPv4Network(ip_cidr_range, strict=True)
+                except ValueError:
+                    raise PromptParseError(
+                        f"Resource at index {idx} (type: {resource_type}) has invalid CIDR '{ip_cidr_range}'. "
+                        "Expected format: 'x.x.x.x/y' (e.g., '10.0.0.0/24')"
+                    )
 
         # Validate each IAM grant has required fields
         for idx, grant in enumerate(iam_grants):
@@ -278,9 +418,24 @@ Return ONLY valid JSON, no explanations or markdown.
             if "role" not in grant:
                 raise PromptParseError(f"IAM grant at index {idx} missing 'role' field")
 
+            # Validate role format (should start with "roles/")
+            role = grant.get("role")
+            if role and isinstance(role, str) and not role.startswith("roles/"):
+                if bt:
+                    bt.logging.warning(
+                        f"IAM grant at index {idx} has role '{role}' that doesn't start with 'roles/'. "
+                        "This may still work if it's a valid GCP IAM role."
+                    )
+
         # Add metadata if missing
         if "metadata" not in parsed:
             parsed["metadata"] = {}
+
+        # Log summary
+        if bt:
+            bt.logging.debug(
+                f"Normalized parsed structure: {len(resources)} resources, {len(iam_grants)} IAM grants"
+            )
 
         return parsed
 

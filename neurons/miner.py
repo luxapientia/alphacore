@@ -107,7 +107,7 @@ class Miner(BaseMinerNeuron):
         if PromptParser is not None:
             try:
                 self._prompt_parser = PromptParser()
-                bt.logging.info("Prompt parser initialized (Phase 1 enabled)")
+                bt.logging.info("Prompt parser initialized")
             except Exception as exc:
                 bt.logging.warning(f"Prompt parser initialization failed: {exc}. Prompt parsing will be skipped.")
                 self._prompt_parser = None
@@ -117,7 +117,7 @@ class Miner(BaseMinerNeuron):
         if TerraformGenerator is not None:
             try:
                 self._terraform_generator = TerraformGenerator()
-                bt.logging.info("Terraform generator initialized (Phase 2 enabled)")
+                bt.logging.info("Terraform generator initialized")
             except Exception as exc:
                 bt.logging.warning(f"Terraform generator initialization failed: {exc}. Terraform generation will be skipped.")
                 self._terraform_generator = None
@@ -299,7 +299,8 @@ class Miner(BaseMinerNeuron):
                 if bt:
                     bt.logging.info(
                         f"Parsed prompt: {len(parsed_requirements.get('resources', []))} resources, "
-                        f"{len(parsed_requirements.get('iam_grants', []))} IAM grants"
+                        f"{len(parsed_requirements.get('iam_grants', []))} IAM grants",
+                        f"parsed_requirements: {parsed_requirements}"
                     )
             except PromptParseError as e:
                 if bt:
@@ -466,6 +467,9 @@ class Miner(BaseMinerNeuron):
                     bt.logging.info(
                         f"[Attempt {attempt + 1}] Parsed prompt: {len(parsed_requirements.get('resources', []))} resources, "
                         f"{len(parsed_requirements.get('iam_grants', []))} IAM grants"
+                    )
+                    bt.logging.debug(
+                        f"[Attempt {attempt + 1}] Parsed prompt content: {json.dumps(parsed_requirements, indent=2)}"
                     )
             except PromptParseError as e:
                 return (
@@ -751,11 +755,24 @@ Please generate a corrected prompt that addresses these errors and will produce 
             if proc.returncode != 0:
                 # Extract error from stderr (last 500 chars for relevance)
                 error_snippet = stderr_text[-500:] if stderr_text else stdout_text[-500:]
+
+                # Enhance error message for common GCP authentication issues
+                enhanced_error = error_snippet
+                if "accessNotConfigured" in error_snippet or "Cloud Resource Manager API" in error_snippet:
+                    enhanced_error = (
+                        "GCP Authentication/API Error: Cloud Resource Manager API is not enabled or "
+                        "service account lacks permissions.\n"
+                        "Fix: 1) Enable API: gcloud services enable cloudresourcemanager.googleapis.com\n"
+                        "     2) Grant permissions: gcloud projects add-iam-policy-binding <PROJECT_ID> "
+                        "--member='serviceAccount:<SERVICE_ACCOUNT>' --role='roles/resourcemanager.projectViewer'\n"
+                        f"Original error: {error_snippet}"
+                    )
+
                 return TerraformResult(
                     success=False,
                     stdout=stdout_text,
                     stderr=stderr_text,
-                    error=error_snippet,
+                    error=enhanced_error,
                     returncode=proc.returncode,
                 )
 

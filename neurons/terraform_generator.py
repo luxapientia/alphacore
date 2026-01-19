@@ -250,7 +250,15 @@ class TerraformGenerator:
             validated["subnetwork"] = validated.get("subnetwork")  # Will be validated during generation
 
         elif resource_type == "google_artifact_registry_repository":
-            validated["repository_id"] = self._validate_name(validated.get("repository_id"), resource_type)
+            # Handle both "name" and "repository_id" fields (LLM may return either)
+            repository_id = validated.get("repository_id") or validated.get("name")
+            if not repository_id:
+                raise TerraformGenerationError(
+                    f"google_artifact_registry_repository missing both 'repository_id' and 'name' fields"
+                )
+            validated["repository_id"] = self._validate_name(repository_id, resource_type)
+            # Remove "name" field if present to avoid confusion
+            validated.pop("name", None)
             validated["location"] = self._validate_region(validated.get("location"))
             validated["format"] = validated.get("format", "DOCKER")
 
