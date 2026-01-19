@@ -578,9 +578,9 @@ class Miner(BaseMinerNeuron):
             import shutil
             if workspace.path.exists():
                 shutil.rmtree(workspace.path, ignore_errors=True)
-        return (
-            ACResult(
-                task_id=task_id,
+            return (
+                ACResult(
+                    task_id=task_id,
                     status="error",
                     notes="terraform.tfstate not found after apply",
                 ),
